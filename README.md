@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="./database-schema.jpeg" alt="OmniGraph" width="860" />
 
@@ -10,15 +10,15 @@
   <a href="https://github.com/pgvector/pgvector"><img src="https://img.shields.io/badge/pgvector-14191f?logo=postgresql&logoColor=6366F1" alt="pgvector" /></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-14191f?logo=fastapi&logoColor=009688" alt="FastAPI" /></a>
   <a href="https://docs.docker.com/compose/"><img src="https://img.shields.io/badge/Docker-14191f?logo=docker&logoColor=2496ED" alt="Docker" /></a>
-  <a href="https://www.anthropic.com/"><img src="https://img.shields.io/badge/Claude_AI-14191f?logo=anthropic&logoColor=D4A574" alt="Claude AI" /></a>
+  <a href="https://www.OpenRouter.com/"><img src="https://img.shields.io/badge/OpenRouter-14191f?logo=OpenRouter&logoColor=D4A574" alt="OpenRouter AI AI" /></a>
   <a href="https://www.voyageai.com/"><img src="https://img.shields.io/badge/Voyage_AI-14191f?logo=voyager&logoColor=A78BFA" alt="Voyage AI" /></a>
-  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-14191f?logo=anthropic&logoColor=8B5CF6" alt="MCP" /></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-14191f?logo=OpenRouter&logoColor=8B5CF6" alt="MCP" /></a>
 </p>
 
 <br />
 
 Transform unstructured documents into a structured, searchable, AI-queryable knowledge graph.<br />
-Ingest PDFs, DOCX, URLs, or raw text. Query with four search strategies, a RAG agent, or Claude Desktop.
+Ingest PDFs, DOCX, URLs, or raw text. Query with four search strategies, a RAG agent, or OpenRouter AI Desktop.
 
 <br />
 
@@ -27,23 +27,23 @@ Ingest PDFs, DOCX, URLs, or raw text. Query with four search strategies, a RAG a
 
 ## Build Knowledge Graphs From Any Document
 
-OmniGraph ingests documents, extracts entities and relationships using Claude AI, embeds everything with Voyage AI, and stores it in a 19-table PostgreSQL schema with pgvector. Three interfaces share the same core engine -- nothing is locked to a single client.
+OmniGraph ingests documents, extracts entities and relationships using OpenRouter AI AI, embeds everything with Voyage AI, and stores it in a 19-table PostgreSQL schema with pgvector. Three interfaces share the same core engine -- nothing is locked to a single client.
 
 - **Ingest anything** -- PDF, DOCX, URL, or plain text with SHA-256 deduplication and automatic versioning
-- **Extract knowledge automatically** -- Claude pulls entities, typed relationships, and concepts with confidence scores
+- **Extract knowledge automatically** -- OpenRouter AI pulls entities, typed relationships, and concepts with confidence scores
 - **Search four ways** -- fulltext, semantic, graph traversal, and weighted hybrid with RBAC post-filtering
-- **Ask questions with citations** -- conversational RAG agent powered by Claude Opus tool-use loop
-- **Plug into Claude Desktop** -- 13-tool MCP server, no REST calls or glue code required
+- **Ask questions with citations** -- conversational RAG agent powered by OpenRouter AI Opus tool-use loop
+- **Plug into OpenRouter AI Desktop** -- 13-tool MCP server, no REST calls or glue code required
 
 ## Features
 
 | Feature | Description |
 |:--------|:------------|
 | **Document Ingestion** | PDF, DOCX, URL, and text parsing with normalization and dedup |
-| **AI Entity Extraction** | Claude Haiku NLP with keyword fallback when LLM is unavailable |
+| **AI Entity Extraction** | OpenRouter AI Haiku NLP with keyword fallback when LLM is unavailable |
 | **Hybrid Search** | Fulltext + semantic + graph retrieval with weighted rank merging |
-| **Agentic RAG** | Claude Opus tool-use agent that returns cited answers |
-| **MCP Server** | 13 tools, 3 resources, 3 prompt templates for Claude Desktop |
+| **Agentic RAG** | OpenRouter AI Opus tool-use agent that returns cited answers |
+| **MCP Server** | 13 tools, 3 resources, 3 prompt templates for OpenRouter AI Desktop |
 | **REST API** | 14 FastAPI endpoints with Swagger docs and API-key auth |
 | **Terminal UI** | Interactive console app with menus for all operations |
 | **Access Control** | RBAC with 4 sensitivity tiers, row-level enforcement, audit log |
@@ -68,7 +68,7 @@ OmniGraph exposes three interfaces. All share the same core engine.
 | Interface | Tools / Endpoints | Auth |
 |:----------|:------------------|:-----|
 | **REST API** | 14 endpoints at `/api/v1/*` | API-key header |
-| **MCP Server** | 13 tools + 3 resources + 3 prompts | Claude Desktop config |
+| **MCP Server** | 13 tools + 3 resources + 3 prompts | OpenRouter AI Desktop config |
 | **Terminal UI** | Interactive menus | Local access |
 
 <details>
@@ -133,7 +133,7 @@ OmniGraph exposes three interfaces. All share the same core engine.
 | **OS** | macOS / Linux (Windows via WSL) |
 | **Runtime** | Python 3.11+ |
 | **Database** | PostgreSQL 16 with pgvector extension |
-| **API Keys** | [Anthropic](https://console.anthropic.com/) + [Voyage AI](https://www.voyageai.com/) |
+| **API Keys** | [OpenRouter](https://console.OpenRouter.com/) + [Voyage AI](https://www.voyageai.com/) |
 | **Optional** | [Docker](https://docs.docker.com/get-docker/) for one-command setup |
 
 ## Getting Started
@@ -141,9 +141,9 @@ OmniGraph exposes three interfaces. All share the same core engine.
 ### Docker (Recommended)
 
 ```bash
-git clone https://github.com/vaishcodescape/Omni-Graph.git
-cd Omni-Graph
-cp .env.example .env          # add your ANTHROPIC_API_KEY and VOYAGE_API_KEY
+git clone https://github.com/ompatelz/Omni-Graph_Omi_Omi.git
+cd Omni-Graph_Omi
+cp .env.example .env          # add your OPENROUTER_API_KEY and VOYAGE_API_KEY
 docker compose up
 ```
 
@@ -187,7 +187,7 @@ python exec.py                                # or terminal UI
 ## Usage
 
 ```bash
-# Upload a PDF -- text extracted, entities extracted by Claude, embeddings stored
+# Upload a PDF -- text extracted, entities extracted by OpenRouter AI, embeddings stored
 curl -X POST http://localhost:8000/api/v1/documents/upload \
   -H "X-API-Key: changeme" \
   -F "file=@paper.pdf" -F "uploaded_by=1" -F "source_type=research_paper"
@@ -203,9 +203,9 @@ curl -X POST http://localhost:8000/api/v1/chat \
   -d '{"message": "Who are the experts on Kubernetes?", "user_id": 1}'
 ```
 
-### Claude Desktop Integration
+### OpenRouter AI Desktop Integration
 
-Add to `~/.claude/claude_desktop_config.json`:
+Add to `~/.OpenRouter AI/OpenRouter AI_desktop_config.json`:
 
 ```json
 {
@@ -213,9 +213,9 @@ Add to `~/.claude/claude_desktop_config.json`:
     "omnigraph": {
       "command": "python",
       "args": ["-m", "mcp_server.server"],
-      "cwd": "/absolute/path/to/Omni-Graph",
+      "cwd": "/absolute/path/to/Omni-Graph_Omi",
       "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "OPENROUTER_API_KEY": "sk-ant-...",
         "VOYAGE_API_KEY":    "pa-...",
         "OMNIGRAPH_DB_HOST": "localhost",
         "OMNIGRAPH_DB_USER": "postgres",
@@ -226,7 +226,7 @@ Add to `~/.claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop. OmniGraph appears in the tools panel. A pre-filled example is in [`claude_desktop_config.example.json`](claude_desktop_config.example.json).
+Restart OpenRouter AI Desktop. OmniGraph appears in the tools panel. A pre-filled example is in [`OpenRouter AI_desktop_config.example.json`](OpenRouter AI_desktop_config.example.json).
 
 ## Configuration
 
@@ -234,7 +234,7 @@ Copy `.env.example` to `.env` and fill in your values.
 
 | Variable | Default | Required | Purpose |
 |:---------|:--------|:---------|:--------|
-| `ANTHROPIC_API_KEY` | -- | Yes | Claude agent and LLM-powered entity extraction |
+| `OPENROUTER_API_KEY` | -- | Yes | OpenRouter AI agent and LLM-powered entity extraction |
 | `VOYAGE_API_KEY` | -- | Yes | Voyage AI embeddings for semantic search |
 | `OMNIGRAPH_API_KEY` | *(empty)* | No | REST API authentication (empty = open in dev) |
 | `OMNIGRAPH_DB_HOST` | `localhost` | No | Database host (use container name in Docker) |
@@ -259,37 +259,37 @@ Copy `.env.example` to `.env` and fill in your values.
 ## Project Structure
 
 ```
-Omni-Graph/
-├── mcp_server/
-│   └── server.py                       MCP server (13 tools, 3 resources, 3 prompts)
-├── api/
-│   ├── main.py                         FastAPI application (14 REST endpoints)
-│   ├── file_parser.py                  PDF / DOCX / URL content extraction
-│   ├── models.py                       Pydantic request and response schemas
-│   ├── auth.py                         API-key authentication middleware
-│   └── dependencies.py                 Database connection dependency injection
-├── omnigraph/
-│   ├── ingestion_pipeline.py           Normalize, deduplicate, version, embed
-│   ├── entity_relation_extractor.py    Claude NLP extraction + keyword fallback
-│   ├── graph_builder.py                Entity/relation CRUD and auto-backfill
-│   ├── semantic_query_engine.py        Fulltext, vector, graph, hybrid search
-│   ├── access_control_audit.py         RBAC, sensitivity tiers, audit logging
-│   ├── agentic_rag.py                  Claude tool-use agent loop
-│   ├── embedder.py                     Voyage AI embedding wrapper
-│   └── console_app.py                  Interactive terminal UI
-├── sql/
-│   ├── schema.sql                      19 tables, constraints, 25+ indexes
-│   ├── procedures_triggers.sql         6 stored procedures, 5 triggers
-│   ├── sample_data.sql                 Seed users, roles, and documents
-│   └── retrieval.sql                   Advanced query examples
-├── docker-compose.yml                  PostgreSQL (pgvector) + API server
-├── Dockerfile                          Python 3.11-slim, uvicorn with 2 workers
-├── requirements.txt
-├── .env.example
-└── claude_desktop_config.example.json
+Omni-Graph_Omi/
+â”œâ”€â”€ mcp_server/
+â”‚   â””â”€â”€ server.py                       MCP server (13 tools, 3 resources, 3 prompts)
+â”œâ”€â”€ api/
+â”‚   â”œâ”€â”€ main.py                         FastAPI application (14 REST endpoints)
+â”‚   â”œâ”€â”€ file_parser.py                  PDF / DOCX / URL content extraction
+â”‚   â”œâ”€â”€ models.py                       Pydantic request and response schemas
+â”‚   â”œâ”€â”€ auth.py                         API-key authentication middleware
+â”‚   â””â”€â”€ dependencies.py                 Database connection dependency injection
+â”œâ”€â”€ omnigraph/
+â”‚   â”œâ”€â”€ ingestion_pipeline.py           Normalize, deduplicate, version, embed
+â”‚   â”œâ”€â”€ entity_relation_extractor.py    OpenRouter AI NLP extraction + keyword fallback
+â”‚   â”œâ”€â”€ graph_builder.py                Entity/relation CRUD and auto-backfill
+â”‚   â”œâ”€â”€ semantic_query_engine.py        Fulltext, vector, graph, hybrid search
+â”‚   â”œâ”€â”€ access_control_audit.py         RBAC, sensitivity tiers, audit logging
+â”‚   â”œâ”€â”€ agentic_rag.py                  OpenRouter AI tool-use agent loop
+â”‚   â”œâ”€â”€ embedder.py                     Voyage AI embedding wrapper
+â”‚   â””â”€â”€ console_app.py                  Interactive terminal UI
+â”œâ”€â”€ sql/
+â”‚   â”œâ”€â”€ schema.sql                      19 tables, constraints, 25+ indexes
+â”‚   â”œâ”€â”€ procedures_triggers.sql         6 stored procedures, 5 triggers
+â”‚   â”œâ”€â”€ sample_data.sql                 Seed users, roles, and documents
+â”‚   â””â”€â”€ retrieval.sql                   Advanced query examples
+â”œâ”€â”€ docker-compose.yml                  PostgreSQL (pgvector) + API server
+â”œâ”€â”€ Dockerfile                          Python 3.11-slim, uvicorn with 2 workers
+â”œâ”€â”€ requirements.txt
+â”œâ”€â”€ .env.example
+â””â”€â”€ OpenRouter AI_desktop_config.example.json
 ```
 
-See the [open issues](https://github.com/vaishcodescape/Omni-Graph/issues) for a full list of proposed features and known issues.
+See the [open issues](https://github.com/ompatelz/Omni-Graph_Omi_Omi/issues) for a full list of proposed features and known issues.
 
 ## Contributing
 
@@ -301,8 +301,9 @@ We welcome contributions! If you have a suggestion that would make OmniGraph bet
 4. Push to the branch (`git push origin feat/amazing-feature`)
 5. Open a Pull Request
 
-You can also [open issues](https://github.com/vaishcodescape/Omni-Graph/issues) for bugs or feature requests.
+You can also [open issues](https://github.com/ompatelz/Omni-Graph_Omi_Omi/issues) for bugs or feature requests.
 
 ## License
 
 Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
+

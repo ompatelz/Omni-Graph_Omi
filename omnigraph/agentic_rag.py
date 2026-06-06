@@ -1,16 +1,21 @@
-# RAG Pipeline
+# RAG Pipeline — OpenRouter backend
 from __future__ import annotations
 
+import json
+import logging
+import os
+import time
 import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-import anthropic
+import openai
 
 from .access_control_audit import AccessControlManager
 from .config import settings
 from .ingestion_pipeline import DatabaseConnection
 from .semantic_query_engine import SemanticQueryEngine
 
+logger = logging.getLogger(__name__)
 
 def _format_docs(docs: List[Dict[str, Any]], max_chars: int = 4000) -> str:
     out: List[str] = []
@@ -98,95 +103,113 @@ def _create_tools(
     return [
         _OmniTool(
             schema={
-                "name": "hybrid_search",
-                "description": "Search the knowledge graph using full-text, semantic, and graph traversal. Use for finding documents relevant to a topic or question.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "Search query"},
-                        "limit": {"type": "integer", "description": "Maximum number of results (default 10)"},
-                    },
-                    "required": ["query"],
-                },
+                "type": "function",
+                "function": {
+                    "name": "hybrid_search",
+                    "description": "Search the knowledge graph using full-text, semantic, and graph traversal. Use for finding documents relevant to a topic or question.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"},
+                            "limit": {"type": "integer", "description": "Maximum number of results (default 10)"},
+                        },
+                        "required": ["query"],
+                    }
+                }
             },
             fn=hybrid_search,
         ),
         _OmniTool(
             schema={
-                "name": "find_experts",
-                "description": "Find users who are domain experts on a concept, ranked by document contributions and relevance.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "concept": {"type": "string", "description": "Concept or topic name"},
-                        "limit": {"type": "integer", "description": "Maximum number of experts to return (default 5)"},
-                    },
-                    "required": ["concept"],
-                },
+                "type": "function",
+                "function": {
+                    "name": "find_experts",
+                    "description": "Find users who are domain experts on a concept, ranked by document contributions and relevance.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "concept": {"type": "string", "description": "Concept or topic name"},
+                            "limit": {"type": "integer", "description": "Maximum number of experts to return (default 5)"},
+                        },
+                        "required": ["concept"],
+                    }
+                }
             },
             fn=find_experts,
         ),
         _OmniTool(
             schema={
-                "name": "get_entity_documents",
-                "description": "List documents linked to a specific entity (person, org, technology).",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "entity_name": {"type": "string", "description": "Entity name to look up"},
-                        "limit": {"type": "integer", "description": "Maximum results (default 10)"},
-                    },
-                    "required": ["entity_name"],
-                },
+                "type": "function",
+                "function": {
+                    "name": "get_entity_documents",
+                    "description": "List documents linked to a specific entity (person, org, technology).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "entity_name": {"type": "string", "description": "Entity name to look up"},
+                            "limit": {"type": "integer", "description": "Maximum results (default 10)"},
+                        },
+                        "required": ["entity_name"],
+                    }
+                }
             },
             fn=get_entity_documents,
         ),
         _OmniTool(
             schema={
-                "name": "find_related_concepts",
-                "description": "Get concepts related to a given concept via hierarchy and co-occurrence in documents.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "concept": {"type": "string", "description": "Concept name"},
-                    },
-                    "required": ["concept"],
-                },
+                "type": "function",
+                "function": {
+                    "name": "find_related_concepts",
+                    "description": "Get concepts related to a given concept via hierarchy and co-occurrence in documents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "concept": {"type": "string", "description": "Concept name"},
+                        },
+                        "required": ["concept"],
+                    }
+                }
             },
             fn=find_related_concepts,
         ),
         _OmniTool(
             schema={
-                "name": "get_document_content",
-                "description": "Fetch the full text content of a document by ID. Use after search when you need to read the actual content. Requires read access.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "document_id": {"type": "integer", "description": "Document ID"},
-                        "max_chars": {"type": "integer", "description": "Maximum characters to return (default 4000)"},
-                    },
-                    "required": ["document_id"],
-                },
+                "type": "function",
+                "function": {
+                    "name": "get_document_content",
+                    "description": "Fetch the full text content of a document by ID. Use after search when you need to read the actual content. Requires read access.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "document_id": {"type": "integer", "description": "Document ID"},
+                            "max_chars": {"type": "integer", "description": "Maximum characters to return (default 4000)"},
+                        },
+                        "required": ["document_id"],
+                    }
+                }
             },
             fn=get_document_content,
         ),
     ]
 
+FREE_MODELS = [
+    "openrouter/free",
+    "google/gemma-4-31b-it:free",
+]
 
 class AnthropicOmniGraphAgent:
-
     _SYSTEM = """\
 You are OmniGraph Assistant, an AI that answers questions from an enterprise knowledge graph.
 
 ## RAG Workflow — follow this order for every factual question:
-1. **Search first**: call `hybrid_search` with the user's topic/question to find candidate documents.
-2. **Read before answering**: for each promising result, call `get_document_content(doc_id)` to fetch the full text. Do not answer from titles or summaries alone.
-3. **Cite sources**: every factual claim in your answer must include a `[doc_id=X]` citation referencing the document you read.
-4. **Explore the graph**: use `find_related_concepts`, `get_entity_documents`, or `find_experts` when the user's question involves entities, relationships, or expertise.
+1. **Search first**: call hybrid_search with the user's topic/question to find candidate documents.
+2. **Read before answering**: for each promising result, call get_document_content(doc_id) to fetch the full text. Do not answer from titles or summaries alone.
+3. **Cite sources**: every factual claim in your answer must include a [doc_id=X] citation referencing the document you read.
+4. **Explore the graph**: use ind_related_concepts, get_entity_documents, or ind_experts when the user's question involves entities, relationships, or expertise.
 
 ## Output format:
 - Lead with a direct answer to the question.
-- Follow with supporting details and `[doc_id=X]` citations.
+- Follow with supporting details and [doc_id=X] citations.
 - If no relevant documents were found after searching, say so clearly rather than guessing.
 - Keep responses concise unless the user asks for depth.
 """
@@ -195,17 +218,30 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
         self,
         db: DatabaseConnection,
         user_id: int,
-        model: str = "claude-opus-4-7",
+        model: str = "",
     ) -> None:
         self.db = db
         self.user_id = user_id
-        self.model = model
-        self.client = anthropic.Anthropic()
+        
+        # We rotate models from FREE_MODELS
+        self._current_model_idx = 0
+        self.client = openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.openrouter_api_key,
+            max_retries=0
+        )
         self.access_manager = AccessControlManager(db)
         self.query_engine = SemanticQueryEngine(db, user_id=user_id)
         tools = _create_tools(self.query_engine, self.access_manager, user_id, db)
-        self._tool_map: Dict[str, Callable] = {t.schema["name"]: t.fn for t in tools}
-        self._anthropic_tools: List[Dict[str, Any]] = [t.schema for t in tools]
+        self._tool_map: Dict[str, Callable] = {t.schema["function"]["name"]: t.fn for t in tools}
+        self._openai_tools: List[Dict[str, Any]] = [t.schema for t in tools]
+
+    def _rotate_model(self, error_msg: str) -> str:
+        old_model = FREE_MODELS[self._current_model_idx]
+        self._current_model_idx = (self._current_model_idx + 1) % len(FREE_MODELS)
+        new_model = FREE_MODELS[self._current_model_idx]
+        logger.warning(f"Model {old_model} failed ({error_msg}). Switched to {new_model}.")
+        return new_model
 
     def run(
         self,
@@ -214,64 +250,96 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
         on_tool_call: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         on_text_chunk: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
-        """Run the agent loop.
-
-        on_tool_call(name, input) -- called just before each tool executes.
-        on_text_chunk(chunk)      -- called for each streamed text token.
-        Both callbacks are optional; omitting them gives the original batch behaviour.
-        """
-        messages: List[Dict[str, Any]] = [{"role": "user", "content": question}]
+        
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": self._SYSTEM},
+            {"role": "user", "content": question}
+        ]
         tools_used: List[Dict[str, Any]] = []
 
         while True:
-            with self.client.messages.stream(
-                model=self.model,
-                max_tokens=16000,
-                system=self._SYSTEM,
-                tools=self._anthropic_tools,
-                messages=messages,
-            ) as stream:
-                if on_text_chunk is not None:
-                    for chunk in stream.text_stream:
-                        on_text_chunk(chunk)
-                response = stream.get_final_message()
+            model = FREE_MODELS[self._current_model_idx]
+            try:
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=self._openai_tools,
+                    stream=True,
+                )
+                
+                # Accumulate stream
+                full_text = ""
+                tool_calls = {}
+                for chunk in response:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        full_text += delta.content
+                        if on_text_chunk:
+                            on_text_chunk(delta.content)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            if tc.index not in tool_calls:
+                                tool_calls[tc.index] = {"id": tc.id, "function": {"name": tc.function.name, "arguments": ""}}
+                            if tc.function.arguments:
+                                tool_calls[tc.index]["function"]["arguments"] += tc.function.arguments
 
-            messages.append({"role": "assistant", "content": response.content})
+                assistant_msg = {"role": "assistant"}
+                if full_text:
+                    assistant_msg["content"] = full_text
+                
+                if not tool_calls:
+                    messages.append(assistant_msg)
+                    break
 
-            if response.stop_reason == "end_turn":
-                break
-
-            if response.stop_reason != "tool_use":
-                break
-
-            tool_results: List[Dict[str, Any]] = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    if on_tool_call is not None:
-                        on_tool_call(block.name, dict(block.input))
-                    fn = self._tool_map.get(block.name)
-                    if fn is not None:
+                # Execute tools
+                tcs_list = [v for k, v in sorted(tool_calls.items())]
+                assistant_msg["tool_calls"] = [{"id": tc["id"], "type": "function", "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}} for tc in tcs_list]
+                messages.append(assistant_msg)
+                
+                for tc in tcs_list:
+                    name = tc["function"]["name"]
+                    args_str = tc["function"]["arguments"]
+                    try:
+                        args = json.loads(args_str)
+                    except:
+                        args = {}
+                    
+                    if on_tool_call:
+                        on_tool_call(name, args)
+                        
+                    fn = self._tool_map.get(name)
+                    if fn:
                         try:
-                            result = fn(**block.input)
-                        except Exception as exc:
-                            result = f"Tool error: {exc}"
+                            res = fn(**args)
+                        except Exception as e:
+                            res = f"Tool error: {e}"
                     else:
-                        result = f"Unknown tool: {block.name}"
-                    tools_used.append({"name": block.name, "input": dict(block.input)})
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": str(result),
+                        res = f"Unknown tool: {name}"
+                    
+                    tools_used.append({"name": name, "input": args})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "name": name,
+                        "content": str(res)
                     })
-            messages.append({"role": "user", "content": tool_results})
+            except openai.APIStatusError as e:
+                if e.status_code in (404, 429, 502, 503, 529):
+                    self._rotate_model(f"HTTP {e.status_code}")
+                    time.sleep(0.5)
+                else:
+                    raise
+            except Exception as e:
+                self._rotate_model(str(e))
+                time.sleep(0.5)
 
-        answer = next((b.text for b in response.content if b.type == "text"), "")
+        answer = messages[-1].get("content", "")
         citations = self._extract_citations(answer)
         return {
             "answer": answer,
             "citations": citations,
             "tools_used": tools_used,
-            "stop_reason": response.stop_reason,
+            "stop_reason": "end_turn",
             "messages": messages,
         }
 
@@ -304,13 +372,12 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
                 for i in ids]
 
 
-
 def get_anthropic_agent(
     db: DatabaseConnection,
     user_id: int,
-    model: str = "claude-opus-4-7",
+    model: str = "",
 ) -> Optional[AnthropicOmniGraphAgent]:
-    if not settings.anthropic_api_key:
+    if not settings.openrouter_api_key:
         return None
     return AnthropicOmniGraphAgent(db, user_id, model=model)
 

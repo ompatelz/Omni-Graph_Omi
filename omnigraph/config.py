@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # ── AI APIs ───────────────────────────────────────────────────────────
     anthropic_api_key: str = Field("", validation_alias="ANTHROPIC_API_KEY")
+    openrouter_api_key: str = Field("", validation_alias="OPENROUTER_API_KEY")
     voyage_api_key: str = Field("", validation_alias="VOYAGE_API_KEY")
 
     # ── REST API ──────────────────────────────────────────────────────────

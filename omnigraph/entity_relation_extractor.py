@@ -10,7 +10,7 @@ from .config import settings
 
 logger = logging.getLogger("omnigraph.extractor")
 
-# ── Keyword fallback dictionaries ────────────────────────────────────────────
+# â”€â”€ Keyword fallback dictionaries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 TECHNOLOGY_KEYWORDS = {
     "Kubernetes", "Docker", "TensorFlow", "PyTorch", "BERT", "GPT",
@@ -76,7 +76,7 @@ You are an expert information extraction system for an enterprise knowledge grap
 
 Extract ALL entities, concepts, and relationships from the text below.
 
-Return ONLY a valid JSON object — no markdown, no explanation:
+Return ONLY a valid JSON object â€” no markdown, no explanation:
 {{
   "entities": [
     {{
@@ -104,9 +104,9 @@ Return ONLY a valid JSON object — no markdown, no explanation:
 
 Rules:
 - Only extract entities clearly mentioned in the text.
-- confidence: 0.7 (implied/unclear) → 1.0 (explicitly named with full context).
-- Only include relationships explicitly stated — not inferred.
-- strength: 0.5 (implied) → 1.0 (explicitly stated).
+- confidence: 0.7 (implied/unclear) â†’ 1.0 (explicitly named with full context).
+- Only include relationships explicitly stated â€” not inferred.
+- strength: 0.5 (implied) â†’ 1.0 (explicitly stated).
 - Relationships must have both source and target present in the entities list.
 
 Text:
@@ -124,19 +124,23 @@ class EntityRelationExtractor:
 
     def __init__(self, db_connection, use_llm: bool = True):
         self.db = db_connection
-        self._use_llm = use_llm and bool(settings.anthropic_api_key)
+        self._use_llm = use_llm and bool(settings.openrouter_api_key)
         self._llm_client = None
 
         if self._use_llm:
             try:
-                import anthropic
-                self._llm_client = anthropic.Anthropic()
-                logger.info("LLM entity extraction enabled (claude-haiku-4-5).")
+                import openai
+                self._llm_client = openai.OpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=settings.openrouter_api_key,
+                    max_retries=0
+                )
+                logger.info("LLM entity extraction enabled (OpenRouter/gemini).")
             except ImportError:
                 self._use_llm = False
-                logger.warning("anthropic not installed; using keyword extraction only.")
+                logger.warning("openai not installed; using keyword extraction only.")
 
-    # ── Public extraction methods (keyword-based, always available) ───────────
+    # ——————————————————————————————————————————————————————————————————————————————
 
     def extract_entities(self, text: str) -> List[Dict]:
         entities = []
@@ -192,7 +196,7 @@ class EntityRelationExtractor:
         logger.debug("Keyword extraction: %d relationships.", len(unique))
         return unique
 
-    # ── Primary entry point ───────────────────────────────────────────────────
+    # â”€â”€ Primary entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def process_document(self, document_id: int) -> Dict:
         """Extract and store entities, concepts, and relationships for a document."""
@@ -225,7 +229,7 @@ class EntityRelationExtractor:
         )
         return {"entities": entities, "concepts": concepts, "relationships": relationships}
 
-    # ── LLM extraction ────────────────────────────────────────────────────────
+    # â”€â”€ LLM extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _extract_with_llm(self, text: str) -> Dict:
         """Call Claude Haiku to extract structured entities/concepts/relationships."""
@@ -299,7 +303,7 @@ class EntityRelationExtractor:
             relationships = self.extract_relationships(content=text, entities=entities)
             return entities, concepts, relationships
 
-    # ── LLM output normalizers ────────────────────────────────────────────────
+    # â”€â”€ LLM output normalizers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _normalize_llm_entities(self, raw: List[Dict], text: str) -> List[Dict]:
         result = []
@@ -372,7 +376,7 @@ class EntityRelationExtractor:
                     })
         return result
 
-    # ── DB storage (unchanged from original) ─────────────────────────────────
+    # â”€â”€ DB storage (unchanged from original) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _store_entities(self, entities: List[Dict], document_id: int) -> None:
         if not entities:
@@ -497,7 +501,7 @@ class EntityRelationExtractor:
         except psycopg2.Error:
             self.db.conn.rollback()
 
-    # ── Static helpers ────────────────────────────────────────────────────────
+    # â”€â”€ Static helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def _match_keywords(text: str, keywords: Set[str], entity_type: str) -> List[Dict]:
@@ -603,3 +607,4 @@ if __name__ == "__main__":
     for r in rels:
         print(f"  {r['source']} --[{r['relation_type']}]--> {r['target']} "
               f"(strength={r['strength']})")
+
