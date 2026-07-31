@@ -428,7 +428,7 @@ class OmniGraphConsole:
                 )
         if self.agent is None:
             console.print(
-                f"\n  [{C_WARN}]agent unavailable —[/] set ANTHROPIC_API_KEY, "
+                f"\n  [{C_WARN}]agent unavailable —[/] set OPENROUTER_API_KEY, "
                 f"or use [b]/search[/] for keyword queries."
             )
             return
