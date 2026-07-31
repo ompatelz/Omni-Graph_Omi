@@ -471,7 +471,7 @@ def search(
     Search the knowledge graph using one of four strategies:
     - **hybrid** (default): weighted blend of fulltext + semantic + graph
     - **fulltext**: PostgreSQL full-text search
-    - **semantic**: vector similarity via Voyage AI embeddings
+    - **semantic**: vector similarity via local hash embeddings or optional Voyage AI
     - **graph**: entity-graph traversal
     """
     engine = SemanticQueryEngine(db, user_id=body.user_id)
@@ -501,7 +501,7 @@ def chat(
     db: DatabaseConnection = Depends(get_db),
 ) -> ChatResponse:
     """
-    Ask a natural-language question. The Claude agent searches the knowledge graph,
+    Ask a natural-language question. The OpenRouter agent searches the knowledge graph,
     reads relevant documents, and returns a cited answer.
 
     Requires ``OPENROUTER_API_KEY`` to be set.

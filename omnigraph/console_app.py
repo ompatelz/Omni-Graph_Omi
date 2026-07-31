@@ -182,7 +182,7 @@ def _help_panel() -> Panel:
 
 class OmniGraphConsole:
 
-    _DEFAULT_MODEL = "claude-opus-4-7"
+    _DEFAULT_MODEL = "openrouter/free"
 
     def __init__(self) -> None:
         self.db: Optional[DatabaseConnection] = None
@@ -822,7 +822,7 @@ class OmniGraphConsole:
             console.print(
                 f"  current model: [{C_BRAND}]{current}[/]\n"
                 f"  [{C_DIM}]usage: /model <model-id>  "
-                f"(e.g. claude-sonnet-4-6, claude-opus-4-7)[/]"
+                f"(e.g. openrouter/free, google/gemma-4-31b-it:free)[/]"
             )
             return
         self._agent_model = model

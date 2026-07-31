@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2  # type: ignore[import-untyped]
 
 from .config import settings
-from .embedder import generate_embedding
+from .embedder import EMBEDDING_DIM, current_model_name, generate_embedding
 
 logger = logging.getLogger("omnigraph.ingestion")
 
@@ -24,12 +24,12 @@ def store_embedding(db: "DatabaseConnection", source_id: int, source_type: str, 
                 """
                 INSERT INTO omnigraph.embeddings
                     (source_id, source_type, vector, model_name, dimensions)
-                VALUES (%s, %s, %s::vector, 'voyage-3', 1024)
+                VALUES (%s, %s, %s::vector, %s, %s)
                 ON CONFLICT (source_type, source_id, model_name) DO UPDATE
                     SET vector     = EXCLUDED.vector,
                         updated_at = CURRENT_TIMESTAMP
                 """,
-                (source_id, source_type, vector_str),
+                (source_id, source_type, vector_str, current_model_name(), EMBEDDING_DIM),
             )
         db.conn.commit()
     except Exception as exc:
@@ -434,7 +434,7 @@ class DocumentIngester:
             logger.error("Failed to fetch documents for re-embedding: %s", exc)
             return 0, 0
 
-        logger.info("Re-embedding %d documents with Voyage AI…", len(rows))
+        logger.info("Re-embedding %d documents with %s.", len(rows), current_model_name())
         success = failure = 0
         for document_id, content in rows:
             try:

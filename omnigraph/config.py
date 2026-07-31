@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     db_pool_max: int = Field(10, validation_alias="OMNIGRAPH_DB_POOL_MAX")
 
     # ── AI APIs ───────────────────────────────────────────────────────────
-    anthropic_api_key: str = Field("", validation_alias="ANTHROPIC_API_KEY")
     openrouter_api_key: str = Field("", validation_alias="OPENROUTER_API_KEY")
     voyage_api_key: str = Field("", validation_alias="VOYAGE_API_KEY")
 

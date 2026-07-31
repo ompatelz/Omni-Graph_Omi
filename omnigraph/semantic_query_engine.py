@@ -115,7 +115,7 @@ class SemanticQueryEngine:
         global _semantic_warned
         if not _embedder_available():
             if not _semantic_warned:
-                logger.warning("Semantic search disabled (voyageai/VOYAGE_API_KEY not configured); "
+                logger.warning("Semantic search disabled; "
                                "skipping vector search for the rest of this session.")
                 _semantic_warned = True
             return []

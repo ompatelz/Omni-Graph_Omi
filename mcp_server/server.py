@@ -19,8 +19,8 @@ Claude Desktop setup (~/.claude/claude_desktop_config.json):
       "args": ["-m", "mcp_server.server"],
       "cwd": "/absolute/path/to/Omni-Graph",
       "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-...",
-        "VOYAGE_API_KEY":    "pa-...",
+        "OPENROUTER_API_KEY": "",
+        "VOYAGE_API_KEY":    "",
         "OMNIGRAPH_DB_HOST": "localhost",
         "OMNIGRAPH_DB_USER": "postgres",
         "OMNIGRAPH_DB_PASSWORD": "postgres"
@@ -144,7 +144,7 @@ async def list_tools() -> list[types.Tool]:
                 "Supports four strategies:\n"
                 "- hybrid (default): weighted blend of fulltext + semantic + graph — best for most queries\n"
                 "- fulltext: PostgreSQL tsvector/tsquery — best for exact keywords, acronyms\n"
-                "- semantic: Voyage AI vector similarity — best for natural-language meaning\n"
+                "- semantic: local hash or Voyage AI vector similarity — best for natural-language meaning\n"
                 "- graph: entity-traversal — best for 'what else is connected to X?'\n\n"
                 "Results include document_id, title, summary, source_type, and relevance score. "
                 "Use read_document to fetch full content."
@@ -268,7 +268,7 @@ async def list_tools() -> list[types.Tool]:
             description=(
                 "Ingest a new text document into the OmniGraph knowledge graph. "
                 "Automatically: normalizes text, deduplicates by SHA-256 hash, "
-                "generates vector embeddings, and runs Claude NLP extraction to "
+                "generates vector embeddings, and runs optional OpenRouter NLP extraction to "
                 "populate entities, concepts, and relationships. Returns the document_id."
             ),
             inputSchema={
@@ -428,7 +428,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="extract_entities",
             description=(
-                "Run Claude-powered NLP extraction on arbitrary text without storing anything. "
+                "Run OpenRouter-powered or keyword NLP extraction on arbitrary text without storing anything. "
                 "Returns extracted entities, concepts, and relationships as structured JSON. "
                 "Useful for previewing what would be extracted before ingesting, or for "
                 "analyzing text from external sources."
