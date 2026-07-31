@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
@@ -257,7 +256,10 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
         ]
         tools_used: List[Dict[str, Any]] = []
 
-        while True:
+        max_attempts = len(FREE_MODELS) * 3
+        attempts = 0
+        while attempts < max_attempts:
+            attempts += 1
             model = FREE_MODELS[self._current_model_idx]
             try:
                 response = self.client.chat.completions.create(
@@ -332,6 +334,7 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
             except Exception as e:
                 self._rotate_model(str(e))
                 time.sleep(0.5)
+        raise RuntimeError("Agent failed after trying all configured free models.")
 
         answer = messages[-1].get("content", "")
         citations = self._extract_citations(answer)

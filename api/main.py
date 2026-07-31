@@ -132,7 +132,7 @@ def health(db: DatabaseConnection = Depends(get_db)) -> Dict[str, Any]:
     return {
         "status": "ok" if db_status == "connected" else "degraded",
         "database": db_status,
-        "llm_extraction": bool(settings.anthropic_api_key),
+        "llm_extraction": bool(settings.openrouter_api_key),
         "semantic_search": bool(settings.voyage_api_key),
     }
 
@@ -165,7 +165,7 @@ def login(body: LoginRequest, db: DatabaseConnection = Depends(get_db)) -> Login
 
             cur.execute(
                 """
-                SELECT r.name FROM omnigraph.roles r
+                SELECT r.role_name FROM omnigraph.roles r
                 JOIN omnigraph.user_roles ur ON ur.role_id = r.role_id
                 WHERE ur.user_id = %s
                 """,
@@ -504,12 +504,12 @@ def chat(
     Ask a natural-language question. The Claude agent searches the knowledge graph,
     reads relevant documents, and returns a cited answer.
 
-    Requires ``ANTHROPIC_API_KEY`` to be set.
+    Requires ``OPENROUTER_API_KEY`` to be set.
     """
-    if not settings.anthropic_api_key:
+    if not settings.openrouter_api_key:
         raise HTTPException(
             status_code=503,
-            detail="ANTHROPIC_API_KEY is not configured. Chat is unavailable.",
+            detail="OPENROUTER_API_KEY is not configured. Chat is unavailable.",
         )
 
     try:

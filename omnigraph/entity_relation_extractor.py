@@ -117,7 +117,7 @@ class EntityRelationExtractor:
     """
     Extracts entities, concepts, and relationships from document text.
 
-    Primary strategy: Claude Haiku LLM extraction (when ANTHROPIC_API_KEY is set).
+    Primary strategy: OpenRouter LLM extraction (when OPENROUTER_API_KEY is set).
     Fallback strategy: regex + keyword matching (always available).
     Both results are merged so neither source is silently dropped.
     """
