@@ -27,12 +27,12 @@ Ingest PDFs, DOCX, URLs, or raw text. Query with four search strategies, a RAG a
 
 ## Build Knowledge Graphs From Any Document
 
-OmniGraph ingests documents, extracts entities and relationships using OpenRouter AI AI, embeds everything with Voyage AI, and stores it in a 19-table PostgreSQL schema with pgvector. Three interfaces share the same core engine -- nothing is locked to a single client.
+OmniGraph ingests documents, extracts entities and relationships with optional OpenRouter models, embeds content with a free local fallback or optional Voyage AI, and stores it in a 19-table PostgreSQL schema with pgvector. Three interfaces share the same core engine -- nothing is locked to a single client.
 
 - **Ingest anything** -- PDF, DOCX, URL, or plain text with SHA-256 deduplication and automatic versioning
-- **Extract knowledge automatically** -- OpenRouter AI pulls entities, typed relationships, and concepts with confidence scores
+- **Extract knowledge automatically** -- keyword extraction works locally; optional OpenRouter models add richer entities, typed relationships, and concepts
 - **Search four ways** -- fulltext, semantic, graph traversal, and weighted hybrid with RBAC post-filtering
-- **Ask questions with citations** -- conversational RAG agent powered by OpenRouter AI Opus tool-use loop
+- **Ask questions with citations** -- conversational RAG agent powered by free OpenRouter models when `OPENROUTER_API_KEY` is configured
 - **Plug into OpenRouter AI Desktop** -- 13-tool MCP server, no REST calls or glue code required
 
 ## Features
@@ -42,7 +42,7 @@ OmniGraph ingests documents, extracts entities and relationships using OpenRoute
 | **Document Ingestion** | PDF, DOCX, URL, and text parsing with normalization and dedup |
 | **AI Entity Extraction** | OpenRouter AI Haiku NLP with keyword fallback when LLM is unavailable |
 | **Hybrid Search** | Fulltext + semantic + graph retrieval with weighted rank merging |
-| **Agentic RAG** | OpenRouter AI Opus tool-use agent that returns cited answers |
+| **Agentic RAG** | OpenRouter free-router tool-use agent that returns cited answers |
 | **MCP Server** | 13 tools, 3 resources, 3 prompt templates for OpenRouter AI Desktop |
 | **REST API** | 14 FastAPI endpoints with Swagger docs and API-key auth |
 | **Terminal UI** | Interactive console app with menus for all operations |
@@ -133,7 +133,7 @@ OmniGraph exposes three interfaces. All share the same core engine.
 | **OS** | macOS / Linux (Windows via WSL) |
 | **Runtime** | Python 3.11+ |
 | **Database** | PostgreSQL 16 with pgvector extension |
-| **API Keys** | [OpenRouter](https://console.OpenRouter.com/) + [Voyage AI](https://www.voyageai.com/) |
+| **API Keys** | None required for local ingest/search. Optional free [OpenRouter](https://openrouter.ai/) key for chat/LLM extraction. |
 | **Optional** | [Docker](https://docs.docker.com/get-docker/) for one-command setup |
 
 ## Getting Started
@@ -141,9 +141,9 @@ OmniGraph exposes three interfaces. All share the same core engine.
 ### Docker (Recommended)
 
 ```bash
-git clone https://github.com/ompatelz/Omni-Graph_Omi_Omi.git
+git clone https://github.com/ompatelz/Omni-Graph_Omi.git
 cd Omni-Graph_Omi
-cp .env.example .env          # add your OPENROUTER_API_KEY and VOYAGE_API_KEY
+cp .env.example .env          # works free locally; OPENROUTER_API_KEY is optional
 docker compose up
 ```
 
@@ -234,8 +234,8 @@ Copy `.env.example` to `.env` and fill in your values.
 
 | Variable | Default | Required | Purpose |
 |:---------|:--------|:---------|:--------|
-| `OPENROUTER_API_KEY` | -- | Yes | OpenRouter AI agent and LLM-powered entity extraction |
-| `VOYAGE_API_KEY` | -- | Yes | Voyage AI embeddings for semantic search |
+| `OPENROUTER_API_KEY` | *(empty)* | No | Optional free OpenRouter key for chat and LLM-powered entity extraction |
+| `VOYAGE_API_KEY` | *(empty)* | No | Optional Voyage hosted embeddings; empty uses free local hash embeddings |
 | `OMNIGRAPH_API_KEY` | *(empty)* | No | REST API authentication (empty = open in dev) |
 | `OMNIGRAPH_DB_HOST` | `localhost` | No | Database host (use container name in Docker) |
 | `OMNIGRAPH_DB_PORT` | `5432` | No | Database port |
@@ -289,7 +289,7 @@ Omni-Graph_Omi/
 â””â”€â”€ OpenRouter AI_desktop_config.example.json
 ```
 
-See the [open issues](https://github.com/ompatelz/Omni-Graph_Omi_Omi/issues) for a full list of proposed features and known issues.
+See the [open issues](https://github.com/ompatelz/Omni-Graph_Omi/issues) for a full list of proposed features and known issues.
 
 ## Contributing
 
@@ -301,7 +301,7 @@ We welcome contributions! If you have a suggestion that would make OmniGraph bet
 4. Push to the branch (`git push origin feat/amazing-feature`)
 5. Open a Pull Request
 
-You can also [open issues](https://github.com/ompatelz/Omni-Graph_Omi_Omi/issues) for bugs or feature requests.
+You can also [open issues](https://github.com/ompatelz/Omni-Graph_Omi/issues) for bugs or feature requests.
 
 ## License
 

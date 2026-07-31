@@ -309,7 +309,7 @@ CREATE TABLE embeddings (
     embedding_id    SERIAL          PRIMARY KEY,
     source_type     VARCHAR(30)     NOT NULL CHECK (source_type IN ('document', 'entity', 'concept')),
     source_id       INTEGER         NOT NULL,
-    model_name      VARCHAR(100)    NOT NULL DEFAULT 'voyage-3',
+    model_name      VARCHAR(100)    NOT NULL DEFAULT 'local-hash-embedding-v1',
     vector          vector(1024)    NOT NULL,
     dimensions      INTEGER         NOT NULL DEFAULT 1024 CHECK (dimensions > 0),
     created_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,

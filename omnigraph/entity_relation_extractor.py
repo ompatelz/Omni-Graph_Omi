@@ -232,12 +232,12 @@ class EntityRelationExtractor:
     # â”€â”€ LLM extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _extract_with_llm(self, text: str) -> Dict:
-        """Call Claude Haiku to extract structured entities/concepts/relationships."""
+        """Call OpenRouter to extract structured entities/concepts/relationships."""
         truncated = text[:6000]
         prompt = _LLM_EXTRACTION_PROMPT.format(text=truncated)
 
         response = self._llm_client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="openrouter/free",
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
