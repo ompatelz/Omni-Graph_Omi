@@ -182,7 +182,7 @@ def _help_panel() -> Panel:
 
 class OmniGraphConsole:
 
-    _DEFAULT_MODEL = "claude-opus-4-7"
+    _DEFAULT_MODEL = "google/gemma-4-31b-it:free"
 
     def __init__(self) -> None:
         self.db: Optional[DatabaseConnection] = None
@@ -198,15 +198,23 @@ class OmniGraphConsole:
 
     # ── Startup ───────────────────────────────────────────────────────────
 
+    def _ensure_connected(self) -> None:
+        if self.db is None:
+            self._connect()
+        elif self.db._conn is None or self.db._conn.closed:
+            self.db.connect()
+
     def run(self) -> None:
         console.clear()
         _print_header()
         console.print()
-        self._connect()
+        self._ensure_connected()
+
         if not self._authenticate():
             self.db.disconnect()
             return
         self._print_welcome()
+        self._cmd_help()
         self._init_prompt_session()
         self._repl()
         self.access_manager.log_audit(
@@ -238,6 +246,41 @@ class OmniGraphConsole:
                 sys.exit(1)
         console.print(f"  [{C_OK}]✓[/] connected to [bold]{target}[/]")
 
+    def authenticate_user(self, identifier: str | int) -> bool:
+        try:
+            with self.db.conn.cursor() as cur:
+                if str(identifier).isdigit():
+                    cur.execute(
+                        "SELECT user_id, full_name, username FROM omnigraph.users WHERE user_id = %s AND is_active = TRUE",
+                        (int(identifier),),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT user_id, full_name, username FROM omnigraph.users WHERE (username = %s OR email = %s) AND is_active = TRUE",
+                        (str(identifier), str(identifier)),
+                    )
+                row = cur.fetchone()
+                if not row and str(identifier).lower() in ("admin", "default", "om"):
+                    cur.execute(
+                        "SELECT user_id, full_name, username FROM omnigraph.users WHERE is_active = TRUE ORDER BY CASE WHEN username = 'om' THEN 0 ELSE 1 END, user_id LIMIT 1"
+                    )
+                    row = cur.fetchone()
+
+            if not row:
+                return False
+            self.current_user_id, self.current_fullname, self.current_username = row
+            self.query_engine = SemanticQueryEngine(self.db, user_id=self.current_user_id)
+            self.access_manager.log_audit(
+                user_id=self.current_user_id,
+                action="login",
+                resource_type="system",
+                details=f"Console login: {self.current_username}",
+            )
+            return True
+        except psycopg2.Error as exc:
+            console.print(f"  [{C_ERR}]auth query failed:[/] {exc}")
+            return False
+
     def _authenticate(self) -> bool:
         console.print()
         try:
@@ -247,38 +290,11 @@ class OmniGraphConsole:
         if not username:
             return False
 
-        try:
-            with self.db.conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT user_id, full_name
-                    FROM omnigraph.users
-                    WHERE username = %s AND is_active = TRUE
-                    """,
-                    (username,),
-                )
-                row = cur.fetchone()
-        except psycopg2.Error as exc:
-            console.print(f"  [{C_ERR}]auth query failed:[/] {exc}")
-            return False
+        ok = self.authenticate_user(username)
+        if not ok:
+            console.print(f"  [{C_WARN}]user '{username}' not found or inactive.[/]")
+        return ok
 
-        if not row:
-            console.print(
-                f"  [{C_WARN}]user '{username}' not found or inactive.[/]"
-            )
-            return False
-
-        self.current_user_id, full_name = row
-        self.current_username = username
-        self.current_fullname = full_name
-        self.query_engine = SemanticQueryEngine(self.db, user_id=self.current_user_id)
-        self.access_manager.log_audit(
-            user_id=self.current_user_id,
-            action="login",
-            resource_type="system",
-            details=f"Console login: {username}",
-        )
-        return True
 
     def _print_welcome(self) -> None:
         info = Table.grid(padding=(0, 3))
@@ -317,21 +333,35 @@ class OmniGraphConsole:
     # ── prompt_toolkit setup ──────────────────────────────────────────────
 
     def _init_prompt_session(self) -> None:
-        completer = WordCompleter(SLASH_COMMANDS, ignore_case=True, sentence=False)
-        style = PTStyle.from_dict({
-            "prompt.brand":   "ansicyan bold",
-            "prompt.sep":     "ansibrightblack",
-            "prompt.user":    "ansibrightblack",
-            "prompt.arrow":   "ansicyan bold",
-            "bottom-toolbar": "bg:#1a1a2e #606080",
-        })
-        self._session = PromptSession(
-            history=FileHistory(str(HISTORY_PATH)),
-            completer=completer,
-            complete_while_typing=True,
-            style=style,
-            bottom_toolbar=self._bottom_toolbar,
-        )
+            # On git-bash/MSYS, prompt_toolkit's Win32 detection fails because
+            # TERM=xterm-256color. Force VT100 output when running outside a
+            # real Windows console.
+            import os as _os
+            import sys as _sys
+            _term = _os.environ.get("TERM", "")
+            _force_vt100 = "xterm" in _term or "vt100" in _term
+            if _force_vt100:
+                from prompt_toolkit.output.vt100 import Vt100_Output
+                _output = Vt100_Output.from_pty(_sys.stdout)
+            else:
+                _output = None
+
+            completer = WordCompleter(SLASH_COMMANDS, ignore_case=True, sentence=False)
+            style = PTStyle.from_dict({
+                "prompt.brand":   "ansicyan bold",
+                "prompt.sep":     "ansibrightblack",
+                "prompt.user":    "ansibrightblack",
+                "prompt.arrow":   "ansicyan bold",
+                "bottom-toolbar": "bg:#1a1a2e #606080",
+            })
+            self._session = PromptSession(
+                history=FileHistory(str(HISTORY_PATH)),
+                completer=completer,
+                complete_while_typing=True,
+                style=style,
+                output=_output,
+                bottom_toolbar=self._bottom_toolbar,
+            )
 
     def _bottom_toolbar(self) -> ANSI:
         return ANSI(
@@ -428,7 +458,7 @@ class OmniGraphConsole:
                 )
         if self.agent is None:
             console.print(
-                f"\n  [{C_WARN}]agent unavailable —[/] set OPENROUTER_API_KEY, "
+                f"\n  [{C_WARN}]agent unavailable —[/] set ANTHROPIC_API_KEY, "
                 f"or use [b]/search[/] for keyword queries."
             )
             return
@@ -549,7 +579,7 @@ class OmniGraphConsole:
             )
         console.print()
         console.print(t)
-        self._audit("search", "document", details=f"Search: {query[:80]}")
+        self._audit("view", "document", details=f"Search: {query[:80]}")
 
     def _cmd_entity(self, args: str) -> None:
         ns = self._parse(
@@ -822,7 +852,7 @@ class OmniGraphConsole:
             console.print(
                 f"  current model: [{C_BRAND}]{current}[/]\n"
                 f"  [{C_DIM}]usage: /model <model-id>  "
-                f"(e.g. claude-sonnet-4-6, claude-opus-4-7)[/]"
+                f"(e.g. gemma-4-31b-it:free, llama-3.3-70b-instruct:free)[/]"
             )
             return
         self._agent_model = model
@@ -923,6 +953,8 @@ class OmniGraphConsole:
         resource_id: Optional[int] = None,
         details: str = "",
     ) -> None:
+        if self.current_user_id is None or not self.access_manager:
+            return
         self.access_manager.log_audit(
             user_id=self.current_user_id,
             action=action,
@@ -930,6 +962,7 @@ class OmniGraphConsole:
             resource_id=resource_id,
             details=details,
         )
+
 
 
 # ── Render helpers ────────────────────────────────────────────────────────────
@@ -960,8 +993,48 @@ def _format_tool_args(args: Dict) -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def main() -> None:
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    parser = argparse.ArgumentParser(description="OmniGraph CLI & Interactive Console")
+    parser.add_argument("-u", "--user", default="admin", help="Username or ID to authenticate as (default: admin)")
+    parser.add_argument("-s", "--search", help="Execute a knowledge search and exit")
+    parser.add_argument("--strategy", default="hybrid", choices=["hybrid", "semantic", "fulltext", "graph"], help="Search strategy")
+    parser.add_argument("--limit", type=int, default=10, help="Maximum search results")
+    parser.add_argument("--ask", help="Ask a question to the Agentic RAG assistant and exit")
+    parser.add_argument("--stats", action="store_true", help="Print graph statistics and exit")
+    parser.add_argument("--version", action="version", version="OmniGraph 1.0.0")
+
+    args, unknown = parser.parse_known_args()
+
     app = OmniGraphConsole()
+
+    if args.stats or args.search or args.ask:
+        app._ensure_connected()
+        try:
+            if args.stats:
+                app._cmd_stats()
+                return
+
+            if not app.authenticate_user(args.user):
+                console.print(f"  [{C_ERR}]Failed to authenticate user '{args.user}'[/]")
+                sys.exit(1)
+
+            if args.search:
+                app._cmd_search(f"{args.search} --strategy {args.strategy} --limit {args.limit}")
+            elif args.ask:
+                app._run_agent(args.ask)
+            return
+        finally:
+            if app.db:
+                app.db.disconnect()
+
+
     try:
         app.run()
     except KeyboardInterrupt:
@@ -970,3 +1043,8 @@ if __name__ == "__main__":
         console.print(f"\n  [{C_ERR}]fatal error:[/] {exc}")
         logger.exception("Fatal error in console application")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+

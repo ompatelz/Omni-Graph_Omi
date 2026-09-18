@@ -6,7 +6,12 @@ from typing import Dict, List, Optional
 
 import psycopg2
 
-from .embedder import generate_embedding, is_available as _embedder_available
+from .embedder import (
+    compute_cosine_similarity,
+    generate_embedding,
+    is_available as _embedder_available,
+)
+
 
 logger = logging.getLogger("omnigraph.query_engine")
 
@@ -46,7 +51,7 @@ class SemanticQueryEngine:
         if strategy == "fulltext":
             results = self.fulltext_search(query, limit, sensitivity_filter)
         elif strategy == "semantic":
-            results = self.vector_similarity_search(query, limit)
+            results = self.vector_similarity_search(query, limit, sensitivity_filter)
         elif strategy == "graph":
             results = self.graph_traverse(parsed, limit)
         else:
@@ -110,47 +115,74 @@ class SemanticQueryEngine:
                 pass
             return []
 
-    def vector_similarity_search(self, query: str, limit: int = 10,
-                                 sensitivity_filter: Optional[List[str]] = None) -> List[Dict]:
+    def vector_similarity_search(
+        self,
+        query: str,
+        limit: int = 10,
+        sensitivity_filter: Optional[List[str]] = None,
+    ) -> List[Dict]:
         global _semantic_warned
         if not _embedder_available():
             if not _semantic_warned:
-                logger.warning("Semantic search disabled (voyageai/VOYAGE_API_KEY not configured); "
-                               "skipping vector search for the rest of this session.")
+                logger.warning("Semantic search disabled (embedder not available); skipping vector search.")
                 _semantic_warned = True
             return []
         try:
             query_vector = self._generate_query_embedding(query)
-            query_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+            sensitivity_clause = ""
+            params: list = []
+            if sensitivity_filter:
+                sensitivity_clause = "AND d.sensitivity_level = ANY(%s)"
+                params.append(sensitivity_filter)
+
             with self.db.conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT d.document_id, d.title, d.source_type, d.sensitivity_level,
-                           1 - (e.vector <=> %s::vector) AS score,
-                           LEFT(d.summary, 200) AS summary,
+                    f"""
+                    SELECT e.source_id, e.vector, d.document_id, d.title, d.source_type,
+                           d.sensitivity_level, LEFT(d.summary, 200) AS summary,
                            u.full_name AS author, d.created_at
                     FROM omnigraph.embeddings e
                     JOIN omnigraph.documents d ON d.document_id = e.source_id
                     JOIN omnigraph.users u ON u.user_id = d.uploaded_by
                     WHERE e.source_type = 'document'
                       AND d.is_archived = FALSE
-                    ORDER BY e.vector <=> %s::vector
-                    LIMIT %s
+                      {sensitivity_clause}
                     """,
-                    (query_str, query_str, limit),
+                    params,
                 )
-                columns = ["document_id", "title", "source_type", "sensitivity_level",
-                           "score", "summary", "author", "created_at"]
-                results = []
-                for row in cur.fetchall():
-                    r = dict(zip(columns, row))
-                    r["search_type"] = "semantic"
-                    r["score"] = float(r["score"]) if r["score"] else 0.0
-                    results.append(r)
-                return results
+                rows = cur.fetchall()
+
+            results = []
+            for row in rows:
+                source_id, raw_vec, doc_id, title, stype, sens, summary, author, created = row
+                if raw_vec is None:
+                    continue
+                if isinstance(raw_vec, str):
+                    raw_str = raw_vec.strip("[]{}")
+                    vec = [float(x) for x in raw_str.split(",") if x.strip()]
+                else:
+                    vec = [float(x) for x in raw_vec]
+
+                score = compute_cosine_similarity(query_vector, vec)
+                results.append({
+                    "document_id": doc_id,
+                    "title": title,
+                    "source_type": stype,
+                    "sensitivity_level": sens,
+                    "score": round(score, 6),
+                    "summary": summary or "",
+                    "author": author,
+                    "created_at": str(created) if created else "",
+                    "search_type": "semantic",
+                })
+
+            results.sort(key=lambda r: r["score"], reverse=True)
+            return results[:limit]
+
         except (ImportError, EnvironmentError):
             return []
-        except psycopg2.Error as exc:
+        except Exception as exc:
             logger.error("Vector similarity search failed: %s", exc)
             try:
                 self.db.conn.rollback()
@@ -393,7 +425,7 @@ class SemanticQueryEngine:
 
         all_results: List[Dict] = []
         all_results.extend(self.fulltext_search(query, per_source_limit, sensitivity_filter))
-        all_results.extend(self.vector_similarity_search(query, per_source_limit))
+        all_results.extend(self.vector_similarity_search(query, per_source_limit, sensitivity_filter))
         all_results.extend(self.graph_traverse(parsed, per_source_limit))
         return all_results
 

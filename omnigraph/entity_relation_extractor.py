@@ -117,28 +117,48 @@ class EntityRelationExtractor:
     """
     Extracts entities, concepts, and relationships from document text.
 
-    Primary strategy: OpenRouter LLM extraction (when OPENROUTER_API_KEY is set).
+    Primary strategy: Claude Haiku LLM extraction (when ANTHROPIC_API_KEY is set).
     Fallback strategy: regex + keyword matching (always available).
     Both results are merged so neither source is silently dropped.
     """
 
     def __init__(self, db_connection, use_llm: bool = True):
         self.db = db_connection
-        self._use_llm = use_llm and bool(settings.openrouter_api_key)
+        has_api_key = bool(settings.openrouter_api_key or settings.openai_api_key or settings.ollama_base_url)
+        self._use_llm = use_llm and has_api_key
         self._llm_client = None
+        self._llm_model = "meta-llama/llama-3.3-70b-instruct:free"
 
         if self._use_llm:
             try:
                 import openai
-                self._llm_client = openai.OpenAI(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=settings.openrouter_api_key,
-                    max_retries=0
-                )
-                logger.info("LLM entity extraction enabled (OpenRouter/gemini).")
+                if settings.openai_api_key:
+                    self._llm_client = openai.OpenAI(
+                        api_key=settings.openai_api_key,
+                        max_retries=1,
+                    )
+                    self._llm_model = settings.llm_model or "gpt-4o-mini"
+                    logger.info("LLM entity extraction enabled (OpenAI: %s).", self._llm_model)
+                elif settings.openrouter_api_key:
+                    self._llm_client = openai.OpenAI(
+                        base_url="https://openrouter.ai/api/v1",
+                        api_key=settings.openrouter_api_key,
+                        max_retries=1,
+                    )
+                    self._llm_model = settings.llm_model or "meta-llama/llama-3.3-70b-instruct:free"
+                    logger.info("LLM entity extraction enabled (OpenRouter: %s).", self._llm_model)
+                elif settings.ollama_base_url:
+                    self._llm_client = openai.OpenAI(
+                        base_url=settings.ollama_base_url,
+                        api_key="ollama",
+                        max_retries=1,
+                    )
+                    self._llm_model = settings.llm_model or "llama3"
+                    logger.info("LLM entity extraction enabled (Ollama: %s).", self._llm_model)
             except ImportError:
                 self._use_llm = False
                 logger.warning("openai not installed; using keyword extraction only.")
+
 
     # ——————————————————————————————————————————————————————————————————————————————
 
@@ -232,23 +252,38 @@ class EntityRelationExtractor:
     # â”€â”€ LLM extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _extract_with_llm(self, text: str) -> Dict:
-        """Call Claude Haiku to extract structured entities/concepts/relationships."""
+        """Call LLM (OpenAI-compatible) to extract structured entities/concepts/relationships."""
         truncated = text[:6000]
         prompt = _LLM_EXTRACTION_PROMPT.format(text=truncated)
 
-        response = self._llm_client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        models_to_try = [self._llm_model]
+        if "meta-llama/llama-3.3-70b-instruct:free" not in models_to_try:
+            models_to_try.append("meta-llama/llama-3.3-70b-instruct:free")
+        for m in ("google/gemini-2.0-flash-exp:free", "mistralai/mistral-7b-instruct:free", "deepseek/deepseek-chat:free"):
+            if m not in models_to_try:
+                models_to_try.append(m)
 
-        raw = response.content[0].text.strip()
-        # Strip markdown code fences if the model added them
-        if "```" in raw:
-            raw = re.sub(r"```(?:json)?\n?", "", raw).strip()
-            raw = re.sub(r"\n?```", "", raw).strip()
+        last_err = None
+        for model_name in models_to_try:
+            try:
+                response = self._llm_client.chat.completions.create(
+                    model=model_name,
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                )
+                raw = response.choices[0].message.content.strip()
+                if "```" in raw:
+                    raw = re.sub(r"```(?:json)?\n?", "", raw).strip()
+                    raw = re.sub(r"\n?```", "", raw).strip()
+                return json.loads(raw)
+            except Exception as exc:
+                last_err = exc
+                logger.debug("Model %s failed extraction: %s; trying next.", model_name, exc)
+                continue
 
-        return json.loads(raw)
+        raise last_err or RuntimeError("All extraction models failed.")
+
 
     def _extract_merged(self, text: str):
         """
@@ -300,7 +335,7 @@ class EntityRelationExtractor:
             )
             entities = self.extract_entities(text)
             concepts = self.extract_concepts(text)
-            relationships = self.extract_relationships(content=text, entities=entities)
+            relationships = self.extract_relationships(text, entities)
             return entities, concepts, relationships
 
     # â”€â”€ LLM output normalizers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

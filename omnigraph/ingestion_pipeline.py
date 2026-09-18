@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2  # type: ignore[import-untyped]
 
 from .config import settings
-from .embedder import generate_embedding
+from .embedder import current_embedding_dim, current_model_name, generate_embedding
 
 logger = logging.getLogger("omnigraph.ingestion")
 
@@ -18,18 +18,21 @@ logger = logging.getLogger("omnigraph.ingestion")
 def store_embedding(db: "DatabaseConnection", source_id: int, source_type: str, text: str) -> None:
     try:
         vector = generate_embedding(text)
-        vector_str = "[" + ",".join(str(v) for v in vector) + "]"
+        model = current_model_name()
+        dim = len(vector)
+        vector_str = "{" + ",".join(str(v) for v in vector) + "}"
         with db.conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO omnigraph.embeddings
                     (source_id, source_type, vector, model_name, dimensions)
-                VALUES (%s, %s, %s::vector, 'voyage-3', 1024)
+                VALUES (%s, %s, %s::FLOAT[], %s, %s)
                 ON CONFLICT (source_type, source_id, model_name) DO UPDATE
                     SET vector     = EXCLUDED.vector,
+                        dimensions = EXCLUDED.dimensions,
                         updated_at = CURRENT_TIMESTAMP
                 """,
-                (source_id, source_type, vector_str),
+                (source_id, source_type, vector_str, model, dim),
             )
         db.conn.commit()
     except Exception as exc:

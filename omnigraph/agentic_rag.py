@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import re
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
@@ -191,20 +192,25 @@ def _create_tools(
         ),
     ]
 
-FREE_MODELS = [
-    "openrouter/free",
-    "google/gemma-4-31b-it:free",
+VERIFIED_FREE_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemini-2.0-flash-exp:free",
+    "mistralai/mistral-7b-instruct:free",
+    "deepseek/deepseek-chat:free",
 ]
+
+FREE_MODELS = VERIFIED_FREE_MODELS  # backward compatibility alias
+
 
 class AnthropicOmniGraphAgent:
     _SYSTEM = """\
 You are OmniGraph Assistant, an AI that answers questions from an enterprise knowledge graph.
 
-## RAG Workflow — follow this order for every factual question:
+## RAG Workflow â€” follow this order for every factual question:
 1. **Search first**: call hybrid_search with the user's topic/question to find candidate documents.
 2. **Read before answering**: for each promising result, call get_document_content(doc_id) to fetch the full text. Do not answer from titles or summaries alone.
 3. **Cite sources**: every factual claim in your answer must include a [doc_id=X] citation referencing the document you read.
-4. **Explore the graph**: use ind_related_concepts, get_entity_documents, or ind_experts when the user's question involves entities, relationships, or expertise.
+4. **Explore the graph**: use find_related_concepts, get_entity_documents, or find_experts when the user's question involves entities, relationships, or expertise.
 
 ## Output format:
 - Lead with a direct answer to the question.
@@ -221,26 +227,169 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
     ) -> None:
         self.db = db
         self.user_id = user_id
-        
-        # We rotate models from FREE_MODELS
-        self._current_model_idx = 0
-        self.client = openai.OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.openrouter_api_key,
-            max_retries=0
-        )
         self.access_manager = AccessControlManager(db)
         self.query_engine = SemanticQueryEngine(db, user_id=user_id)
+
         tools = _create_tools(self.query_engine, self.access_manager, user_id, db)
         self._tool_map: Dict[str, Callable] = {t.schema["function"]["name"]: t.fn for t in tools}
         self._openai_tools: List[Dict[str, Any]] = [t.schema for t in tools]
 
-    def _rotate_model(self, error_msg: str) -> str:
-        old_model = FREE_MODELS[self._current_model_idx]
-        self._current_model_idx = (self._current_model_idx + 1) % len(FREE_MODELS)
-        new_model = FREE_MODELS[self._current_model_idx]
-        logger.warning(f"Model {old_model} failed ({error_msg}). Switched to {new_model}.")
+        self.client: Optional[openai.OpenAI] = None
+        self._models: List[str] = []
+        self._current_model_idx = 0
+        self._init_client(model)
+
+    def _init_client(self, model_pref: str = "") -> None:
+        provider = (settings.llm_provider or "auto").lower()
+
+        # 1. OpenAI direct
+        if (provider in ("auto", "openai")) and settings.openai_api_key:
+            try:
+                self.client = openai.OpenAI(
+                    api_key=settings.openai_api_key,
+                    max_retries=1,
+                )
+                self._models = [settings.llm_model or model_pref or "gpt-4o-mini"]
+                logger.info("OmniGraph Agent initialized with OpenAI (%s).", self._models[0])
+                return
+            except Exception as exc:
+                logger.warning("Failed to initialize OpenAI client: %s", exc)
+
+        # 2. OpenRouter
+        if (provider in ("auto", "openrouter")) and settings.openrouter_api_key:
+            try:
+                self.client = openai.OpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=settings.openrouter_api_key,
+                    max_retries=0,
+                )
+                models: List[str] = []
+                if settings.llm_model:
+                    models.append(settings.llm_model)
+                if model_pref and model_pref not in models:
+                    models.append(model_pref)
+                for m in VERIFIED_FREE_MODELS:
+                    if m not in models:
+                        models.append(m)
+                self._models = models
+                logger.info("OmniGraph Agent initialized with OpenRouter (primary: %s).", self._models[0])
+                return
+            except Exception as exc:
+                logger.warning("Failed to initialize OpenRouter client: %s", exc)
+
+        # 3. Ollama local
+        if (provider in ("auto", "ollama")) and settings.ollama_base_url:
+            try:
+                self.client = openai.OpenAI(
+                    base_url=settings.ollama_base_url,
+                    api_key="ollama",
+                    max_retries=1,
+                )
+                self._models = [settings.llm_model or model_pref or "llama3"]
+                logger.info("OmniGraph Agent initialized with Ollama (%s).", self._models[0])
+                return
+            except Exception as exc:
+                logger.warning("Failed to initialize Ollama client: %s", exc)
+
+        logger.info("No remote LLM configured. OmniGraph Agent will use local extractive RAG.")
+
+    def _rotate_model(self, error_msg: str) -> Optional[str]:
+        if not self._models or len(self._models) <= 1:
+            return None
+        old_model = self._models[self._current_model_idx]
+        self._current_model_idx = (self._current_model_idx + 1) % len(self._models)
+        new_model = self._models[self._current_model_idx]
+        logger.warning("Model %s failed (%s). Switched to %s.", old_model, error_msg, new_model)
         return new_model
+
+    def _local_extractive_run(
+        self,
+        question: str,
+        on_tool_call: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        on_text_chunk: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Perform deterministic knowledge graph retrieval and extract a cited answer without remote LLM."""
+        tools_used: List[Dict[str, Any]] = []
+
+        if on_tool_call:
+            on_tool_call("hybrid_search", {"query": question, "limit": 5})
+        tools_used.append({"name": "hybrid_search", "input": {"query": question, "limit": 5}})
+
+        search_results = self.query_engine.search(question, strategy="hybrid", limit=5)
+        readable_docs = [
+            r for r in search_results
+            if r.get("document_id") is not None
+            and self.access_manager.check_access(self.user_id, "document", r["document_id"], "read")
+        ]
+
+        fetched_contents: Dict[int, str] = {}
+        for d in readable_docs[:3]:
+            doc_id = d["document_id"]
+            if on_tool_call:
+                on_tool_call("get_document_content", {"document_id": doc_id, "max_chars": 2000})
+            tools_used.append({"name": "get_document_content", "input": {"document_id": doc_id}})
+            content_str = self._tool_map["get_document_content"](doc_id, max_chars=2000)
+            fetched_contents[doc_id] = content_str
+
+        expert_mentions: List[str] = []
+        if any(w in question.lower() for w in ["expert", "who", "lead", "engineer", "author", "specialist"]):
+            keywords = [w for w in re.findall(r"\b\w+\b", question) if len(w) > 3 and w.lower() not in ("about", "what", "which", "where")]
+            for kw in keywords[:2]:
+                if on_tool_call:
+                    on_tool_call("find_experts", {"concept": kw, "limit": 3})
+                exp_res = self._tool_map["find_experts"](kw, limit=3)
+                if exp_res and "No experts" not in exp_res:
+                    expert_mentions.append(f"Experts for **{kw}**:\n{exp_res}")
+                    tools_used.append({"name": "find_experts", "input": {"concept": kw}})
+                    break
+
+        if not readable_docs:
+            answer = (
+                f"No accessible documents in OmniGraph matched the query: **{question}**.\n\n"
+                "Please verify your query terms or verify account read permissions."
+            )
+        else:
+            sections: List[str] = []
+            top = readable_docs[0]
+            summary_snippet = (top.get("summary") or "").strip()
+
+            sections.append(f"Based on OmniGraph knowledge base retrieval, here is what was found regarding **{question}**:\n")
+            if summary_snippet:
+                sections.append(f"> {summary_snippet} [doc_id={top['document_id']}]\n")
+
+            sections.append("### Key Findings & Document Evidence")
+            for doc in readable_docs:
+                doc_id = doc["document_id"]
+                title = doc.get("title", f"Document #{doc_id}")
+                stype = doc.get("source_type", "doc")
+                content_text = fetched_contents.get(doc_id, "")
+
+                paragraphs = [p.strip() for p in content_text.split("\n\n") if len(p.strip()) > 30 and not p.startswith("Title:")]
+                detail = paragraphs[0] if paragraphs else (doc.get("summary") or f"Reference document for {title}")
+                sections.append(f"- **{title}** (`{stype}`): {detail} [doc_id={doc_id}]")
+
+            if expert_mentions:
+                sections.append("\n### Identified Domain Experts")
+                sections.extend(expert_mentions)
+
+            answer = "\n\n".join(sections)
+
+        if on_text_chunk:
+            chunk_size = 64
+            for i in range(0, len(answer), chunk_size):
+                on_text_chunk(answer[i : i + chunk_size])
+
+        citations = self._extract_citations(answer)
+        return {
+            "answer": answer,
+            "citations": citations,
+            "tools_used": tools_used,
+            "stop_reason": "end_turn",
+            "messages": [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": answer},
+            ],
+        }
 
     def run(
         self,
@@ -249,18 +398,21 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
         on_tool_call: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         on_text_chunk: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
-        
+        if not self.client or not self._models:
+            return self._local_extractive_run(question, on_tool_call=on_tool_call, on_text_chunk=on_text_chunk)
+
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self._SYSTEM},
             {"role": "user", "content": question}
         ]
         tools_used: List[Dict[str, Any]] = []
 
-        max_attempts = len(FREE_MODELS) * 3
-        attempts = 0
-        while attempts < max_attempts:
-            attempts += 1
-            model = FREE_MODELS[self._current_model_idx]
+        max_turns = 6
+        model_retries = 0
+        max_model_retries = max(len(self._models), 2)
+
+        for _ in range(max_turns):
+            model = self._models[self._current_model_idx]
             try:
                 response = self.client.chat.completions.create(
                     model=model,
@@ -268,11 +420,12 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
                     tools=self._openai_tools,
                     stream=True,
                 )
-                
-                # Accumulate stream
+
                 full_text = ""
-                tool_calls = {}
+                tool_calls: Dict[int, Dict[str, Any]] = {}
                 for chunk in response:
+                    if not chunk.choices:
+                        continue
                     delta = chunk.choices[0].delta
                     if delta.content:
                         full_text += delta.content
@@ -280,35 +433,50 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
                             on_text_chunk(delta.content)
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
-                            if tc.index not in tool_calls:
-                                tool_calls[tc.index] = {"id": tc.id, "function": {"name": tc.function.name, "arguments": ""}}
-                            if tc.function.arguments:
-                                tool_calls[tc.index]["function"]["arguments"] += tc.function.arguments
+                            idx = tc.index if tc.index is not None else 0
+                            if idx not in tool_calls:
+                                tool_calls[idx] = {
+                                    "id": tc.id or f"call_{idx}",
+                                    "function": {"name": tc.function.name or "", "arguments": ""},
+                                }
+                            if tc.function and tc.function.name:
+                                tool_calls[idx]["function"]["name"] = tc.function.name
+                            if tc.function and tc.function.arguments:
+                                tool_calls[idx]["function"]["arguments"] += tc.function.arguments
 
-                assistant_msg = {"role": "assistant"}
+                assistant_msg: Dict[str, Any] = {"role": "assistant"}
                 if full_text:
                     assistant_msg["content"] = full_text
-                
+
                 if not tool_calls:
                     messages.append(assistant_msg)
                     break
 
-                # Execute tools
-                tcs_list = [v for k, v in sorted(tool_calls.items())]
-                assistant_msg["tool_calls"] = [{"id": tc["id"], "type": "function", "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}} for tc in tcs_list]
+                tcs_list = [v for _, v in sorted(tool_calls.items())]
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["function"]["name"],
+                            "arguments": tc["function"]["arguments"],
+                        },
+                    }
+                    for tc in tcs_list
+                ]
                 messages.append(assistant_msg)
-                
+
                 for tc in tcs_list:
                     name = tc["function"]["name"]
                     args_str = tc["function"]["arguments"]
                     try:
-                        args = json.loads(args_str)
-                    except:
+                        args = json.loads(args_str) if args_str else {}
+                    except Exception:
                         args = {}
-                    
+
                     if on_tool_call:
                         on_tool_call(name, args)
-                        
+
                     fn = self._tool_map.get(name)
                     if fn:
                         try:
@@ -317,26 +485,33 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
                             res = f"Tool error: {e}"
                     else:
                         res = f"Unknown tool: {name}"
-                    
+
                     tools_used.append({"name": name, "input": args})
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
                         "name": name,
-                        "content": str(res)
+                        "content": str(res),
                     })
-            except openai.APIStatusError as e:
-                if e.status_code in (404, 429, 502, 503, 529):
-                    self._rotate_model(f"HTTP {e.status_code}")
-                    time.sleep(0.5)
-                else:
-                    raise
-            except Exception as e:
-                self._rotate_model(str(e))
-                time.sleep(0.5)
-        raise RuntimeError("Agent failed after trying all configured free models.")
 
-        answer = messages[-1].get("content", "")
+            except (openai.APIStatusError, openai.OpenAIError, Exception) as exc:
+                if isinstance(exc, openai.APIStatusError) and exc.status_code in (401, 403):
+                    logger.warning("LLM authentication failed (%s); switching to local extractive RAG immediately.", exc)
+                    return self._local_extractive_run(question, on_tool_call=on_tool_call, on_text_chunk=on_text_chunk)
+
+                model_retries += 1
+                logger.warning("Model invocation failed (%s). Retry %d/%d.", exc, model_retries, max_model_retries)
+                next_model = self._rotate_model(str(exc))
+                if model_retries >= max_model_retries or not next_model:
+                    logger.info("Falling back to deterministic local extractive RAG.")
+                    return self._local_extractive_run(question, on_tool_call=on_tool_call, on_text_chunk=on_text_chunk)
+                time.sleep(0.5)
+
+
+        answer = messages[-1].get("content", "") if messages else ""
+        if not answer:
+            return self._local_extractive_run(question, on_tool_call=on_tool_call, on_text_chunk=on_text_chunk)
+
         citations = self._extract_citations(answer)
         return {
             "answer": answer,
@@ -347,7 +522,7 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
         }
 
     def _extract_citations(self, answer: str) -> List[Dict[str, Any]]:
-        ids = []
+        ids: List[int] = []
         seen = set()
         for m in re.finditer(r"\[doc_id=(\d+)\]", answer):
             doc_id = int(m.group(1))
@@ -359,30 +534,27 @@ You are OmniGraph Assistant, an AI that answers questions from an enterprise kno
         try:
             with self.db.conn.cursor() as cur:
                 cur.execute(
-                    "SELECT document_id, title, source_type FROM omnigraph.documents "
-                    "WHERE document_id = ANY(%s)",
+                    "SELECT document_id, title, source_type FROM omnigraph.documents WHERE document_id = ANY(%s)",
                     (ids,),
                 )
-                rows = {r[0]: {"document_id": r[0], "title": r[1], "source_type": r[2]}
-                        for r in cur.fetchall()}
+                rows = {r[0]: {"document_id": r[0], "title": r[1], "source_type": r[2]} for r in cur.fetchall()}
         except Exception:
             try:
                 self.db.conn.rollback()
             except Exception:
                 pass
             rows = {}
-        return [rows.get(i, {"document_id": i, "title": "(unknown)", "source_type": ""})
-                for i in ids]
+        return [rows.get(i, {"document_id": i, "title": "(unknown)", "source_type": ""}) for i in ids]
 
 
 def get_anthropic_agent(
     db: DatabaseConnection,
     user_id: int,
     model: str = "",
-) -> Optional[AnthropicOmniGraphAgent]:
-    if not settings.openrouter_api_key:
-        return None
+) -> AnthropicOmniGraphAgent:
+    """Factory creating an OmniGraph agent instance with resilient fallback."""
     return AnthropicOmniGraphAgent(db, user_id, model=model)
 
 
 __all__ = ["AnthropicOmniGraphAgent", "get_anthropic_agent", "_create_tools", "_format_docs"]
+
