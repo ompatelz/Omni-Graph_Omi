@@ -206,8 +206,8 @@ WITH RECURSIVE paths AS (
     -- Base: start from source entity (TensorFlow, id=5)
     SELECT
         r.target_entity_id AS current_id,
-        ARRAY[es.name, et.name] AS path_names,
-        ARRAY[r.relation_type] AS path_relations,
+        ARRAY[es.name::TEXT, et.name::TEXT]::TEXT[] AS path_names,
+        ARRAY[r.relation_type::TEXT]::TEXT[] AS path_relations,
         1 AS depth
     FROM relations r
     JOIN entities es ON es.entity_id = r.source_entity_id
@@ -219,8 +219,8 @@ WITH RECURSIVE paths AS (
     -- Recursive step
     SELECT
         r.target_entity_id,
-        p.path_names || et.name,
-        p.path_relations || r.relation_type,
+        p.path_names || et.name::TEXT,
+        p.path_relations || r.relation_type::TEXT,
         p.depth + 1
     FROM paths p
     JOIN relations r ON r.source_entity_id = p.current_id

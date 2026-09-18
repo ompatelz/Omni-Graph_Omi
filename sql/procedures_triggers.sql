@@ -13,7 +13,7 @@ SET search_path TO omnigraph;
 -- Extracts technology and organization names from document content using
 -- pattern matching against existing entities.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION sp_auto_extract_entities(p_document_id INTEGER)
+CREATE OR REPLACE FUNCTION omnigraph.sp_auto_extract_entities(p_document_id INTEGER)
 RETURNS INTEGER AS $$
 DECLARE
     v_entity RECORD;
@@ -22,7 +22,7 @@ DECLARE
     v_mention_count INTEGER;
 BEGIN
     -- Get document content
-    SELECT content INTO v_content FROM documents WHERE document_id = p_document_id;
+    SELECT content INTO v_content FROM omnigraph.documents WHERE document_id = p_document_id;
 
     IF v_content IS NULL THEN
         RAISE EXCEPTION 'Document % not found', p_document_id;
@@ -31,7 +31,7 @@ BEGIN
     -- Match existing entities against document content
     FOR v_entity IN
         SELECT entity_id, name
-        FROM entities
+        FROM omnigraph.entities
         WHERE entity_type IN ('technology', 'organization', 'standard')
     LOOP
         -- Count occurrences (case-insensitive)
@@ -40,7 +40,7 @@ BEGIN
         INTO v_mention_count;
 
         IF v_mention_count > 0 THEN
-            INSERT INTO document_entities (document_id, entity_id, relevance, mention_count)
+            INSERT INTO omnigraph.document_entities (document_id, entity_id, relevance, mention_count)
             VALUES (p_document_id, v_entity.entity_id,
                     LEAST(1.0, v_mention_count * 0.1)::NUMERIC(4,3),
                     v_mention_count)
@@ -60,7 +60,7 @@ $$ LANGUAGE plpgsql;
 -- Validates whether a user has permission to perform an action on a resource.
 -- Returns TRUE if access is granted, FALSE otherwise.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION sp_enforce_access_control(
+CREATE OR REPLACE FUNCTION omnigraph.sp_enforce_access_control(
     p_user_id       INTEGER,
     p_resource_type VARCHAR(50),
     p_resource_id   INTEGER,
@@ -74,7 +74,7 @@ BEGIN
     -- Determine sensitivity level of the resource
     IF p_resource_type = 'document' THEN
         SELECT sensitivity_level INTO v_sensitivity
-        FROM documents WHERE document_id = p_resource_id;
+        FROM omnigraph.documents WHERE document_id = p_resource_id;
     ELSE
         v_sensitivity := 'public';  -- Default for non-document resources
     END IF;
@@ -86,8 +86,8 @@ BEGIN
     -- Check user's roles against access policies
     SELECT EXISTS (
         SELECT 1
-        FROM user_roles ur
-        JOIN access_policies ap ON ur.role_id = ap.role_id
+        FROM omnigraph.user_roles ur
+        JOIN omnigraph.access_policies ap ON ur.role_id = ap.role_id
         WHERE ur.user_id = p_user_id
           AND ap.resource_type = p_resource_type
           AND ap.sensitivity_level = v_sensitivity
@@ -100,7 +100,7 @@ BEGIN
 
     -- Log access attempt if denied
     IF NOT v_has_access THEN
-        INSERT INTO audit_logs (user_id, action, resource_type, resource_id, details)
+        INSERT INTO omnigraph.audit_logs (user_id, action, resource_type, resource_id, details)
         VALUES (p_user_id, 'access_denied', p_resource_type, p_resource_id,
                 FORMAT('Denied %s access to %s #%s (sensitivity: %s)',
                        p_action, p_resource_type, p_resource_id, v_sensitivity));
@@ -115,7 +115,7 @@ $$ LANGUAGE plpgsql;
 -- Archives document versions older than a specified number of days,
 -- keeping only the N most recent versions per document.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION sp_archive_old_versions(
+CREATE OR REPLACE FUNCTION omnigraph.sp_archive_old_versions(
     p_keep_versions INTEGER DEFAULT 3,
     p_older_than_days INTEGER DEFAULT 180
 )
@@ -126,10 +126,10 @@ BEGIN
     WITH ranked_versions AS (
         SELECT version_id, document_id, version_number,
                ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY version_number DESC) AS rn
-        FROM document_versions
+        FROM omnigraph.document_versions
         WHERE created_at < CURRENT_TIMESTAMP - (p_older_than_days || ' days')::INTERVAL
     )
-    DELETE FROM document_versions
+    DELETE FROM omnigraph.document_versions
     WHERE version_id IN (
         SELECT version_id FROM ranked_versions WHERE rn > p_keep_versions
     );
@@ -144,7 +144,7 @@ $$ LANGUAGE plpgsql;
 -- Finds domain experts for a given concept by analyzing document contributions
 -- and entity associations. Returns users ranked by expertise score.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION sp_find_experts(p_concept_name VARCHAR(200))
+CREATE OR REPLACE FUNCTION omnigraph.sp_find_experts(p_concept_name VARCHAR(200))
 RETURNS TABLE (
     user_id     INTEGER,
     full_name   VARCHAR(255),
@@ -162,10 +162,10 @@ BEGIN
         COUNT(DISTINCT d.document_id) AS doc_count,
         ROUND(AVG(dc.relevance_score), 3) AS avg_relevance,
         ROUND(COUNT(DISTINCT d.document_id) * AVG(dc.relevance_score) * 10, 2) AS expertise_score
-    FROM users u
-    JOIN documents d ON d.uploaded_by = u.user_id
-    JOIN document_concepts dc ON dc.document_id = d.document_id
-    JOIN concepts c ON c.concept_id = dc.concept_id
+    FROM omnigraph.users u
+    JOIN omnigraph.documents d ON d.uploaded_by = u.user_id
+    JOIN omnigraph.document_concepts dc ON dc.document_id = d.document_id
+    JOIN omnigraph.concepts c ON c.concept_id = dc.concept_id
     WHERE LOWER(c.name) = LOWER(p_concept_name)
       AND u.is_active = TRUE
     GROUP BY u.user_id, u.full_name, u.department
@@ -175,8 +175,8 @@ $$ LANGUAGE plpgsql;
 
 -- ============================================================================
 -- STORED PROCEDURE 5: sp_shortest_path
--- Finds the shortest relationship path between two entities using BFS
--- via recursive CTE. Returns the path as an array of entity names.
+-- Finds the shortest relationship path between two entities using bidirectional BFS
+-- via recursive CTE. Returns the path as an array of entity names and relation types.
 -- ============================================================================
 CREATE OR REPLACE FUNCTION omnigraph.sp_shortest_path(
     p_source_entity_id INTEGER,
@@ -191,30 +191,35 @@ RETURNS TABLE (
 BEGIN
     RETURN QUERY
     WITH RECURSIVE entity_path AS (
-        -- Base case: start from source entity
+        -- Base case: start from source entity (forward or reverse edge)
         SELECT
-            r.target_entity_id AS current_id,
+            CASE WHEN r.source_entity_id = p_source_entity_id THEN r.target_entity_id ELSE r.source_entity_id END AS current_id,
             1 AS depth,
-            ARRAY[es.name, et.name]::TEXT[] AS entities,
-            ARRAY[r.relation_type]::TEXT[] AS relations
+            ARRAY[
+                (SELECT name FROM omnigraph.entities WHERE entity_id = p_source_entity_id)::TEXT,
+                (SELECT name FROM omnigraph.entities WHERE entity_id = CASE WHEN r.source_entity_id = p_source_entity_id THEN r.target_entity_id ELSE r.source_entity_id END)::TEXT
+            ]::TEXT[] AS entities,
+            ARRAY[
+                CASE WHEN r.source_entity_id = p_source_entity_id THEN r.relation_type::TEXT ELSE ('<-' || r.relation_type)::TEXT END
+            ]::TEXT[] AS relations,
+            ARRAY[p_source_entity_id, CASE WHEN r.source_entity_id = p_source_entity_id THEN r.target_entity_id ELSE r.source_entity_id END]::INTEGER[] AS visited_ids
         FROM omnigraph.relations r
-        JOIN omnigraph.entities es ON es.entity_id = r.source_entity_id
-        JOIN omnigraph.entities et ON et.entity_id = r.target_entity_id
-        WHERE r.source_entity_id = p_source_entity_id
+        WHERE r.source_entity_id = p_source_entity_id OR r.target_entity_id = p_source_entity_id
 
         UNION ALL
 
-        -- Recursive case: traverse relationships
+        -- Recursive case: traverse relationships in either direction
         SELECT
-            r.target_entity_id,
+            CASE WHEN r.source_entity_id = ep.current_id THEN r.target_entity_id ELSE r.source_entity_id END,
             ep.depth + 1,
             ep.entities || et.name::TEXT,
-            ep.relations || r.relation_type::TEXT
+            ep.relations || (CASE WHEN r.source_entity_id = ep.current_id THEN r.relation_type::TEXT ELSE ('<-' || r.relation_type)::TEXT END),
+            ep.visited_ids || (CASE WHEN r.source_entity_id = ep.current_id THEN r.target_entity_id ELSE r.source_entity_id END)
         FROM entity_path ep
-        JOIN omnigraph.relations r ON r.source_entity_id = ep.current_id
-        JOIN omnigraph.entities et ON et.entity_id = r.target_entity_id
+        JOIN omnigraph.relations r ON (r.source_entity_id = ep.current_id OR r.target_entity_id = ep.current_id)
+        JOIN omnigraph.entities et ON et.entity_id = (CASE WHEN r.source_entity_id = ep.current_id THEN r.target_entity_id ELSE r.source_entity_id END)
         WHERE ep.depth < p_max_depth
-          AND NOT (et.name = ANY(ep.entities))  -- Prevent cycles
+          AND NOT ((CASE WHEN r.source_entity_id = ep.current_id THEN r.target_entity_id ELSE r.source_entity_id END) = ANY(ep.visited_ids))
     )
     SELECT
         ep.depth AS path_length,
@@ -232,9 +237,9 @@ $$ LANGUAGE plpgsql;
 -- Returns the full concept hierarchy network for a given root concept,
 -- using recursive traversal of the concept_hierarchy table.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION sp_concept_network(p_root_concept_name VARCHAR(200))
+CREATE OR REPLACE FUNCTION omnigraph.sp_concept_network(p_root_concept_name VARCHAR(200))
 RETURNS TABLE (
-    depth       INTEGER,
+    depth        INTEGER,
     concept_name VARCHAR(200),
     parent_name  VARCHAR(200),
     relationship VARCHAR(50),
@@ -250,7 +255,7 @@ BEGIN
             NULL::VARCHAR(200) AS parent_name,
             NULL::VARCHAR(50) AS relationship_type,
             0 AS depth
-        FROM concepts c
+        FROM omnigraph.concepts c
         WHERE LOWER(c.name) = LOWER(p_root_concept_name)
 
         UNION ALL
@@ -263,8 +268,8 @@ BEGIN
             ch.relationship_type,
             ct.depth + 1
         FROM concept_tree ct
-        JOIN concept_hierarchy ch ON ch.parent_concept_id = ct.concept_id
-        JOIN concepts child ON child.concept_id = ch.child_concept_id
+        JOIN omnigraph.concept_hierarchy ch ON ch.parent_concept_id = ct.concept_id
+        JOIN omnigraph.concepts child ON child.concept_id = ch.child_concept_id
         WHERE ct.depth < 10
     )
     SELECT
@@ -274,7 +279,7 @@ BEGIN
         ct.relationship_type,
         COUNT(dc.document_id) AS doc_count
     FROM concept_tree ct
-    LEFT JOIN document_concepts dc ON dc.concept_id = ct.concept_id
+    LEFT JOIN omnigraph.document_concepts dc ON dc.concept_id = ct.concept_id
     GROUP BY ct.depth, ct.concept_name, ct.parent_name, ct.relationship_type
     ORDER BY ct.depth, ct.concept_name;
 END;
@@ -302,7 +307,7 @@ $$ LANGUAGE plpgsql;
 -- Ensures taxonomy consistency: prevents circular references and
 -- automatically computes the level field based on parent.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION fn_maintain_taxonomy()
+CREATE OR REPLACE FUNCTION omnigraph.fn_maintain_taxonomy()
 RETURNS TRIGGER AS $$
 DECLARE
     v_parent_level INTEGER;
@@ -316,11 +321,11 @@ BEGIN
             IF v_check_id = NEW.taxonomy_id THEN
                 RAISE EXCEPTION 'Circular reference detected in taxonomy: node % cannot be its own ancestor', NEW.taxonomy_id;
             END IF;
-            SELECT parent_id INTO v_check_id FROM taxonomy WHERE taxonomy_id = v_check_id;
+            SELECT parent_id INTO v_check_id FROM omnigraph.taxonomy WHERE taxonomy_id = v_check_id;
         END LOOP;
 
         -- Auto-compute level from parent
-        SELECT level INTO v_parent_level FROM taxonomy WHERE taxonomy_id = NEW.parent_id;
+        SELECT level INTO v_parent_level FROM omnigraph.taxonomy WHERE taxonomy_id = NEW.parent_id;
         IF v_parent_level IS NOT NULL THEN
             NEW.level := v_parent_level + 1;
         END IF;
@@ -332,26 +337,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_maintain_taxonomy ON omnigraph.taxonomy;
 CREATE TRIGGER trg_maintain_taxonomy
-    BEFORE INSERT OR UPDATE ON taxonomy
+    BEFORE INSERT OR UPDATE ON omnigraph.taxonomy
     FOR EACH ROW
-    EXECUTE FUNCTION fn_maintain_taxonomy();
+    EXECUTE FUNCTION omnigraph.fn_maintain_taxonomy();
 
 -- ============================================================================
 -- TRIGGER 4: trg_update_concept_relevance
 -- Updates the relevance score of a concept whenever a new document-concept
 -- link is created, based on the total number of document associations.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION fn_update_concept_relevance()
+CREATE OR REPLACE FUNCTION omnigraph.fn_update_concept_relevance()
 RETURNS TRIGGER AS $$
 DECLARE
     v_new_score NUMERIC(5,3);
 BEGIN
     SELECT COUNT(*) * 0.5 INTO v_new_score
-    FROM document_concepts
+    FROM omnigraph.document_concepts
     WHERE concept_id = NEW.concept_id;
 
-    UPDATE concepts
+    UPDATE omnigraph.concepts
     SET relevance_score = LEAST(v_new_score, 10.0)
     WHERE concept_id = NEW.concept_id;
 
@@ -359,30 +365,44 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_update_concept_relevance ON omnigraph.document_concepts;
 CREATE TRIGGER trg_update_concept_relevance
-    AFTER INSERT ON document_concepts
+    AFTER INSERT ON omnigraph.document_concepts
     FOR EACH ROW
-    EXECUTE FUNCTION fn_update_concept_relevance();
+    EXECUTE FUNCTION omnigraph.fn_update_concept_relevance();
 
 -- ============================================================================
 -- TRIGGER 5: trg_log_user_creation
 -- Automatically creates an audit log entry when a new user is created.
 -- ============================================================================
-CREATE OR REPLACE FUNCTION fn_log_user_creation()
+CREATE OR REPLACE FUNCTION omnigraph.fn_log_user_creation()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO audit_logs (user_id, action, resource_type, resource_id, details)
+    INSERT INTO omnigraph.audit_logs (user_id, action, resource_type, resource_id, details)
     VALUES (NEW.user_id, 'create', 'user', NEW.user_id,
             FORMAT('New user created: %s (%s)', NEW.full_name, NEW.email));
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_log_user_creation ON omnigraph.users;
 CREATE TRIGGER trg_log_user_creation
-    AFTER INSERT ON users
+    AFTER INSERT ON omnigraph.users
     FOR EACH ROW
-    EXECUTE FUNCTION fn_log_user_creation();
+    EXECUTE FUNCTION omnigraph.fn_log_user_creation();
 
 -- ============================================================================
+-- VIEW: entity_relationships
+-- Provides an alias view over omnigraph.relations for graph queries.
+-- ============================================================================
+CREATE OR REPLACE VIEW omnigraph.entity_relationships AS
+SELECT
+    relation_id AS relationship_id,
+    source_entity_id AS source_id,
+    target_entity_id AS target_id,
+    relation_type,
+    strength
+FROM omnigraph.relations;
+
 -- END OF STORED PROCEDURES & TRIGGERS
 -- ============================================================================

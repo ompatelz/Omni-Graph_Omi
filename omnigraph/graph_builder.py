@@ -348,28 +348,39 @@ class KnowledgeGraphBuilder:
                 cur.execute(
                     """
                     WITH RECURSIVE neighborhood AS (
-                        SELECT r.target_entity_id AS entity_id, e.name, e.entity_type,
-                               r.relation_type, r.strength, 1 AS depth,
-                               ARRAY[%s, r.target_entity_id] AS visited
+                        SELECT
+                            CASE WHEN r.source_entity_id = %s THEN r.target_entity_id ELSE r.source_entity_id END AS entity_id,
+                            e.name, e.entity_type,
+                            CASE WHEN r.source_entity_id = %s THEN r.relation_type ELSE ('<-' || r.relation_type) END AS relation_type,
+                            r.strength, 1 AS depth,
+                            ARRAY[%s, CASE WHEN r.source_entity_id = %s THEN r.target_entity_id ELSE r.source_entity_id END]::INTEGER[] AS visited
                         FROM omnigraph.relations r
-                        JOIN omnigraph.entities e ON e.entity_id = r.target_entity_id
-                        WHERE r.source_entity_id = %s
+                        JOIN omnigraph.entities e ON e.entity_id = (CASE WHEN r.source_entity_id = %s THEN r.target_entity_id ELSE r.source_entity_id END)
+                        WHERE r.source_entity_id = %s OR r.target_entity_id = %s
+
                         UNION ALL
-                        SELECT r.target_entity_id, e.name, e.entity_type,
-                               r.relation_type, r.strength, n.depth + 1,
-                               n.visited || r.target_entity_id
+
+                        SELECT
+                            CASE WHEN r.source_entity_id = n.entity_id THEN r.target_entity_id ELSE r.source_entity_id END,
+                            e.name, e.entity_type,
+                            CASE WHEN r.source_entity_id = n.entity_id THEN r.relation_type ELSE ('<-' || r.relation_type) END,
+                            r.strength, n.depth + 1,
+                            n.visited || (CASE WHEN r.source_entity_id = n.entity_id THEN r.target_entity_id ELSE r.source_entity_id END)
                         FROM neighborhood n
-                        JOIN omnigraph.relations r ON r.source_entity_id = n.entity_id
-                        JOIN omnigraph.entities e ON e.entity_id = r.target_entity_id
-                        WHERE n.depth < %s AND NOT (r.target_entity_id = ANY(n.visited))
+                        JOIN omnigraph.relations r ON (r.source_entity_id = n.entity_id OR r.target_entity_id = n.entity_id)
+                        JOIN omnigraph.entities e ON e.entity_id = (CASE WHEN r.source_entity_id = n.entity_id THEN r.target_entity_id ELSE r.source_entity_id END)
+                        WHERE n.depth < %s
+                          AND NOT ((CASE WHEN r.source_entity_id = n.entity_id THEN r.target_entity_id ELSE r.source_entity_id END) = ANY(n.visited))
                     )
-                    SELECT DISTINCT entity_id, name, entity_type, relation_type, strength, depth
-                    FROM neighborhood ORDER BY depth, strength DESC
+                    SELECT DISTINCT ON (entity_id) entity_id, name, entity_type, relation_type, strength, depth
+                    FROM neighborhood ORDER BY entity_id, depth, strength DESC
                     """,
-                    (entity_id, entity_id, max_depth),
+                    (entity_id, entity_id, entity_id, entity_id, entity_id, entity_id, entity_id, max_depth),
                 )
                 columns = ["entity_id", "name", "entity_type", "relation_type", "strength", "depth"]
-                return [dict(zip(columns, row)) for row in cur.fetchall()]
+                results = [dict(zip(columns, row)) for row in cur.fetchall()]
+                results.sort(key=lambda r: (r["depth"], -float(r["strength"])))
+                return results
         except psycopg2.Error as exc:
             logger.error("Failed to get entity neighborhood: %s", exc)
             return []

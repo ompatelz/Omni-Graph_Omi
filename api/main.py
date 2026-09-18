@@ -5,6 +5,8 @@ FastAPI application exposing the full OmniGraph pipeline over HTTP.
 
 Endpoints
 ---------
+GET  /
+GET  /explorer
 GET  /health
 POST /api/v1/auth/login
 POST /api/v1/documents/ingest
@@ -16,6 +18,7 @@ DELETE /api/v1/documents/{doc_id}
 POST /api/v1/search
 POST /api/v1/chat
 GET  /api/v1/graph/stats
+GET  /api/v1/graph/data
 GET  /api/v1/graph/entities
 GET  /api/v1/graph/entities/{entity_id}/neighborhood
 POST /api/v1/graph/build
@@ -28,12 +31,15 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+import openai
 import psycopg2
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from omnigraph.access_control_audit import AccessControlManager
@@ -115,6 +121,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse, tags=["Dashboard"], include_in_schema=False)
+@app.get("/explorer", response_class=HTMLResponse, tags=["Dashboard"], include_in_schema=False)
+def dashboard() -> HTMLResponse:
+    index_file = _STATIC_DIR / "index.html"
+    if index_file.exists():
+        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>OmniGraph Explorer</h1><p>index.html not found.</p>")
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -490,6 +511,55 @@ def search(
 
 # ── Chat (Agentic RAG) ────────────────────────────────────────────────────────
 
+def _retrieval_only_chat_response(
+    message: str,
+    user_id: int,
+    db: DatabaseConnection,
+    reason: str,
+) -> ChatResponse:
+    engine = SemanticQueryEngine(db, user_id=user_id)
+    acl = AccessControlManager(db)
+    results = engine.search(message, strategy="hybrid", limit=5)
+    readable = [
+        r for r in results
+        if r.get("document_id") is not None
+        and acl.check_access(user_id, "document", r["document_id"], "read")
+    ]
+
+    citations = [
+        {
+            "document_id": r["document_id"],
+            "title": r.get("title", ""),
+            "source_type": r.get("source_type", ""),
+        }
+        for r in readable
+    ]
+    tools_used = [{
+        "name": "hybrid_search",
+        "input": {"query": message, "limit": 5},
+        "fallback": True,
+    }]
+
+    if not readable:
+        answer = (
+            f"LLM generation is unavailable ({reason}), and no accessible "
+            "documents matched the question."
+        )
+    else:
+        lines = [
+            f"LLM generation is unavailable ({reason}), so I returned retrieval results instead.",
+            "",
+            "Most relevant accessible documents:",
+        ]
+        for r in readable:
+            summary = (r.get("summary") or "").strip()
+            snippet = f": {summary}" if summary else ""
+            lines.append(f"- [doc_id={r['document_id']}] {r.get('title', 'Untitled')}{snippet}")
+        answer = "\n".join(lines)
+
+    return ChatResponse(answer=answer, citations=citations, tools_used=tools_used)
+
+
 @app.post(
     "/api/v1/chat",
     tags=["Chat"],
@@ -515,6 +585,30 @@ def chat(
     try:
         agent = AnthropicOmniGraphAgent(db, user_id=body.user_id)
         result = agent.run(body.message)
+    except openai.APIStatusError as exc:
+        if exc.status_code in (401, 403):
+            logger.warning("OpenRouter authentication failed; using retrieval fallback: %s", exc)
+            return _retrieval_only_chat_response(
+                body.message,
+                body.user_id,
+                db,
+                "OpenRouter authentication failed",
+            )
+        logger.error("Agent service error: %s", exc)
+        return _retrieval_only_chat_response(
+            body.message,
+            body.user_id,
+            db,
+            f"OpenRouter returned HTTP {exc.status_code}",
+        )
+    except openai.OpenAIError as exc:
+        logger.error("Agent OpenRouter error: %s", exc)
+        return _retrieval_only_chat_response(
+            body.message,
+            body.user_id,
+            db,
+            "OpenRouter service error",
+        )
     except Exception as exc:
         logger.error("Agent error: %s", exc)
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}")
@@ -537,6 +631,65 @@ def graph_stats(db: DatabaseConnection = Depends(get_db)) -> Dict[str, Any]:
     """Return aggregate counts for the knowledge graph."""
     builder = KnowledgeGraphBuilder(db)
     return builder.get_graph_stats()
+
+
+# ── Graph — visual data ───────────────────────────────────────────────
+
+@app.get(
+    "/api/v1/graph/data",
+    tags=["Graph"],
+    dependencies=[Depends(require_api_key)],
+)
+def graph_data(
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: DatabaseConnection = Depends(get_db),
+) -> Dict[str, Any]:
+    try:
+        with db.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT entity_id, name, entity_type, confidence, description
+                FROM omnigraph.entities
+                ORDER BY confidence DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            nodes = [
+                {
+                    "id": r[0],
+                    "label": r[1],
+                    "type": r[2],
+                    "confidence": float(r[3]) if r[3] else 1.0,
+                    "description": r[4] or "",
+                }
+                for r in cur.fetchall()
+            ]
+            node_ids = [n["id"] for n in nodes]
+            if not node_ids:
+                return {"nodes": [], "edges": []}
+
+            cur.execute(
+                """
+                SELECT relationship_id, source_id, target_id, relation_type, strength
+                FROM omnigraph.entity_relationships
+                WHERE source_id = ANY(%s) AND target_id = ANY(%s)
+                """,
+                (node_ids, node_ids),
+            )
+            edges = [
+                {
+                    "id": r[0],
+                    "source": r[1],
+                    "target": r[2],
+                    "label": r[3],
+                    "strength": float(r[4]) if r[4] else 1.0,
+                }
+                for r in cur.fetchall()
+            ]
+            return {"nodes": nodes, "edges": edges}
+    except psycopg2.Error as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── Graph — list entities ─────────────────────────────────────────────────────
@@ -630,3 +783,4 @@ def build_graph(db: DatabaseConnection = Depends(get_db)) -> BuildGraphResponse:
         duplicates_detected=result["duplicates_detected"],
         documents_newly_extracted=result["documents_newly_extracted"],
     )
+
