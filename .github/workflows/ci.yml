@@ -45,10 +45,10 @@ jobs:
           PGPASSWORD: password
         run: |
           psql -h localhost -U postgres -d omnigraph -f sql/schema.sql
-          psql -h localhost -U postgres -d omnigraph -f sql/seed_data.sql
+          psql -h localhost -U postgres -d omnigraph -f sql/sample_data.sql
           psql -h localhost -U postgres -d omnigraph -f sql/procedures_triggers.sql
 
-      - name: Run Pytest Suite
+      - name: Re-embed documents & Run Pytest Suite
         env:
           OMNIGRAPH_DB_HOST: localhost
           OMNIGRAPH_DB_PORT: 5432
@@ -58,4 +58,5 @@ jobs:
           OMNIGRAPH_EMBEDDING_PROVIDER: local
           OMNIGRAPH_LLM_PROVIDER: local
         run: |
+          python reembed.py
           python -m pytest tests/ -v

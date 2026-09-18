@@ -184,9 +184,9 @@ pip install -r requirements.txt
 # Create database
 createdb omnigraph
 
-# Run schema, triggers, and seed data
+# Run schema, triggers, and sample data
 psql -d omnigraph -f sql/schema.sql
-psql -d omnigraph -f sql/seed_data.sql
+psql -d omnigraph -f sql/sample_data.sql
 psql -d omnigraph -f sql/procedures_triggers.sql
 ```
 
