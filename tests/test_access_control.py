@@ -147,12 +147,27 @@ def test_query_logging_and_analytics(db_conn):
 def test_role_assignment_and_revocation(db_conn):
     """Test assigning and revoking a role with audit logging."""
     acm = AccessControlManager(db_conn)
-    # Assign role 4 to user 12 (Om Patel) by user 1 (Admin)
-    assign_ok = acm.assign_role(user_id=12, role_id=4, assigned_by=1)
+    with db_conn.conn.cursor() as cur:
+        # Find a valid user and an unassigned role for that user
+        cur.execute(
+            """
+            SELECT u.user_id, r.role_id
+            FROM omnigraph.users u
+            CROSS JOIN omnigraph.roles r
+            LEFT JOIN omnigraph.user_roles ur ON u.user_id = ur.user_id AND r.role_id = ur.role_id
+            WHERE ur.role_id IS NULL AND u.user_id != 1
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+        assert row is not None, "Need at least one unassigned user-role pair"
+        target_user_id, target_role_id = row
+
+    assign_ok = acm.assign_role(user_id=target_user_id, role_id=target_role_id, assigned_by=1)
     assert assign_ok is True
 
     # Revoke it
-    revoke_ok = acm.revoke_role(user_id=12, role_id=4, revoked_by=1)
+    revoke_ok = acm.revoke_role(user_id=target_user_id, role_id=target_role_id, revoked_by=1)
     assert revoke_ok is True
 
 

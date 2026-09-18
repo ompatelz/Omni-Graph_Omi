@@ -8,20 +8,21 @@ from omnigraph.config import Settings, settings
 
 def test_default_settings():
     """Verify default configuration values."""
-    s = Settings(_env_file=None)
-    assert s.db_host == "localhost"
-    assert s.db_port == 5432
-    assert s.db_name == "omnigraph"
-    assert s.db_user == "postgres"
-    assert s.db_password == "postgres"
-    assert s.db_pool_min == 2
-    assert s.db_pool_max == 10
-    assert s.embedding_provider == "auto"
-    assert s.llm_provider == "auto"
-    assert s.llm_model == ""
-    assert s.ollama_base_url == "http://localhost:11434/v1"
-    assert s.cors_origins == ["*"]
-    assert s.log_level == "INFO"
+    with patch.dict(os.environ, {}, clear=True):
+        s = Settings(_env_file=None)
+        assert s.db_host == "localhost"
+        assert s.db_port == 5432
+        assert s.db_name == "omnigraph"
+        assert s.db_user == "postgres"
+        assert s.db_password == "postgres"
+        assert s.db_pool_min == 2
+        assert s.db_pool_max == 10
+        assert s.embedding_provider == "auto"
+        assert s.llm_provider == "auto"
+        assert s.llm_model == ""
+        assert s.ollama_base_url == "http://localhost:11434/v1"
+        assert s.cors_origins == ["*"]
+        assert s.log_level == "INFO"
 
 
 def test_singleton_settings_instance():
